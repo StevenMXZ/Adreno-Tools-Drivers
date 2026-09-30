@@ -1,0 +1,1009 @@
+From 81c861011fe82a899d2e8cd4e279ef727f878fed Mon Sep 17 00:00:00 2001
+From: Karmjit Mahil <karmjit.mahil@igalia.com>
+Date: Sat, 19 Oct 2024 13:49:09 +0200
+Subject: [PATCH] tu: Add DECK_EMU to advertise being a SteamDeck
+
+This can help running games where the Turnip driver might not be
+known, preventing them from running. Some games might also make
+adjustments to graphics settings if they detect the SteamDeck.
+
+Signed-off-by: Karmjit Mahil <karmjit.mahil@igalia.com>
+Signed-off-by: whitebelyash <whbexiumwork@gmail.com>
+---
+ src/freedreno/vulkan/tu_device.cc | 15 +++++++++++++++
+ src/freedreno/vulkan/tu_util.cc   |  1 +
+ src/freedreno/vulkan/tu_util.h    |  1 +
+ 3 files changed, 17 insertions(+)
+
+diff --git a/src/freedreno/vulkan/tu_device.cc b/src/freedreno/vulkan/tu_device.cc
+index 82efb07af908..b646ce9c7b9a 100644
+--- a/src/freedreno/vulkan/tu_device.cc
++++ b/src/freedreno/vulkan/tu_device.cc
+@@ -996,6 +996,12 @@ tu_get_physical_device_properties_1_2(struct tu_physical_device *pdevice,
+       };
+    }
+ 
++   if (TU_DEBUG(DECK_EMU)) {
++      p->driverID = VK_DRIVER_ID_MESA_RADV;
++      memset(p->driverName, 0, sizeof(p->driverName));
++      snprintf(p->driverName, VK_MAX_DRIVER_NAME_SIZE, "radv");
++   }
++
+    p->denormBehaviorIndependence =
+       VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_ALL;
+    p->roundingModeIndependence =
+@@ -1294,6 +1300,11 @@ tu_get_properties(struct tu_physical_device *pdevice,
+    props->deviceID = pdevice->dev_id.chip_id;
+    props->deviceType = VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
+ 
++   if (TU_DEBUG(DECK_EMU)) {
++      props->vendorID = 0x1002;
++      props->deviceID = 0x163F;
++   }
++
+    /* Vulkan 1.4 */
+    props->dynamicRenderingLocalReadDepthStencilAttachments = true;
+    props->dynamicRenderingLocalReadMultisampledAttachments = true;
+@@ -1308,6 +1319,10 @@ tu_get_properties(struct tu_physical_device *pdevice,
+    strcpy(props->deviceName, pdevice->name);
+    memcpy(props->pipelineCacheUUID, pdevice->cache_uuid, VK_UUID_SIZE);
+ 
++   if (TU_DEBUG(DECK_EMU)) {
++      strcpy(props->deviceName, "AMD Custom GPU 0405 (RADV VANGOGH)");
++   }
++
+    tu_get_physical_device_properties_1_1(pdevice, props);
+    tu_get_physical_device_properties_1_2(pdevice, props);
+    tu_get_physical_device_properties_1_3(pdevice, props);
+diff --git a/src/freedreno/vulkan/tu_util.cc b/src/freedreno/vulkan/tu_util.cc
+index 598c3dc78164..d70db9cfa930 100644
+--- a/src/freedreno/vulkan/tu_util.cc
++++ b/src/freedreno/vulkan/tu_util.cc
+@@ -57,6 +57,7 @@ static const struct debug_control tu_debug_options[] = {
+    { "nocb", TU_DEBUG_NO_CONCURRENT_BINNING },
+    { "forcecb", TU_DEBUG_FORCE_CONCURRENT_BINNING },
+    { "computeroundrobin", TU_DEBUG_COMPUTE_ROUND_ROBIN },
++   { "deck_emu", TU_DEBUG_DECK_EMU },
+    { NULL, 0 }
+ };
+ 
+diff --git a/src/freedreno/vulkan/tu_util.h b/src/freedreno/vulkan/tu_util.h
+index f73c1f99a8aa..b23a241f91f6 100644
+--- a/src/freedreno/vulkan/tu_util.h
++++ b/src/freedreno/vulkan/tu_util.h
+@@ -75,6 +75,7 @@ enum tu_debug_flags : uint64_t
+    TU_DEBUG_NO_CONCURRENT_BINNING    = BITFIELD64_BIT(35),
+    TU_DEBUG_FORCE_CONCURRENT_BINNING = BITFIELD64_BIT(36),
+    TU_DEBUG_COMPUTE_ROUND_ROBIN      = BITFIELD64_BIT(37),
++   TU_DEBUG_DECK_EMU                 = BITFIELD64_BIT(37),
+ };
+ 
+ struct tu_env {
+From cdd24cd2e4765bd6f7e466cb2a9bd29a00b5bd53 Mon Sep 17 00:00:00 2001
+From: whitebelyash <whbexiumwork@gmail.com>
+Date: Fri, 16 Jan 2026 22:41:23 +0400
+Subject: [PATCH] HACK: u_gralloc: always use ubwc detection path
+
+u_gralloc checks if the current buffer was allocated by the Qualcomm vendor gralloc by comparing 'gmsm' magic with the buffer data. Since newer gralloc versions this way isn't working anymore, causing the condition to never success - essentially skipping setting proper DRM format modifier. This caused huge distorted picture on the screen because the allocated buffer never got a proper modifier as it should have
+
+Signed-off-by: whitebelyash <whbexiumwork@gmail.com>
+---
+ src/util/u_gralloc/u_gralloc_fallback.c | 12 ++++++++----
+ 1 file changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/src/util/u_gralloc/u_gralloc_fallback.c b/src/util/u_gralloc/u_gralloc_fallback.c
+index 44fb32d8cfd5..bb6459c2e29c 100644
+--- a/src/util/u_gralloc/u_gralloc_fallback.c
++++ b/src/util/u_gralloc/u_gralloc_fallback.c
+@@ -148,12 +148,16 @@ fallback_gralloc_get_buffer_info(struct u_gralloc *gralloc,
+    out->strides[0] = stride;
+ 
+ #ifdef HAS_FREEDRENO
+-   uint32_t gmsm = ('g' << 24) | ('m' << 16) | ('s' << 8) | 'm';
++  /* uint32_t gmsm = ('g' << 24) | ('m' << 16) | ('s' << 8) | 'm';
+    if (hnd->handle->numInts >= 2 && hnd->handle->data[hnd->handle->numFds] == gmsm) {
+-      /* This UBWC flag was introduced in a5xx. */
+-      bool ubwc = hnd->handle->data[hnd->handle->numFds + 1] & 0x08000000;
+-      out->modifier = ubwc ? DRM_FORMAT_MOD_QCOM_COMPRESSED : DRM_FORMAT_MOD_LINEAR;
++
+    }
++   */
++   
++   /* TODO: Actually find a way to detect a Qualcomm vendor allocated buffer */
++   /* This UBWC flag was introduced in a5xx. */
++   bool ubwc = hnd->handle->data[hnd->handle->numFds + 1] & 0x08000000;
++   out->modifier = ubwc ? DRM_FORMAT_MOD_QCOM_COMPRESSED : DRM_FORMAT_MOD_LINEAR;
+ #endif
+ 
+    return 0;
+From b2314829411d26a28f2be116418f1f163d29f842 Mon Sep 17 00:00:00 2001
+From: whitebelyash <whbexiumwork@gmail.com>
+Date: Fri, 16 Jan 2026 22:55:20 +0400
+Subject: [PATCH] tu/freedreno: add disable_gmem GPU property
+
+Disables GMEM usage completely, effectively same thing as TU_DEBUG=sysmem
+
+Signed-off-by: whitebelyash <whbexiumwork@gmail.com>
+---
+ src/freedreno/common/freedreno_dev_info.h | 2 ++
+ src/freedreno/vulkan/tu_cmd_buffer.cc     | 6 ++++++
+ 2 files changed, 8 insertions(+)
+
+diff --git a/src/freedreno/common/freedreno_dev_info.h b/src/freedreno/common/freedreno_dev_info.h
+index 4302b8a4bb9..827be3b78e8 100644
+--- a/src/freedreno/common/freedreno_dev_info.h
++++ b/src/freedreno/common/freedreno_dev_info.h
+@@ -471,6 +471,8 @@ struct fd_dev_info {
+ 
+       uint32_t max_texel_buffer_range_elements;
+       uint32_t max_storage_buffer_range_bytes;
++      /* If GMEM needs to be disabled for this GPU */
++      bool disable_gmem;
+ 
+       /* There seems to be a HW bug where a dummy prefetch sam.s2en always
+        * reads its src2 from fiber 0. This may cause faults when fiber 0 is a
+diff --git a/src/freedreno/vulkan/tu_cmd_buffer.cc b/src/freedreno/vulkan/tu_cmd_buffer.cc
+index 60ad3a8ef90..f7d14a67f9a 100644
+--- a/src/freedreno/vulkan/tu_cmd_buffer.cc
++++ b/src/freedreno/vulkan/tu_cmd_buffer.cc
+@@ -1390,6 +1390,12 @@ use_sysmem_rendering(struct tu_cmd_buffer *cmd,
+       return true;
+    }
+ 
++   bool no_gmem = cmd->device->physical_device->dev_info.props.disable_gmem;
++   if (no_gmem) {
++       cmd->state.rp.force_render_mode_reason = "Unsupported GPU";
++       return true;
++    }
++
+    /* can't fit attachments into gmem */
+    if (!cmd->state.tiling->possible) {
+       cmd->state.rp.force_render_mode_reason = "Can't fit attachments into gmem";
+From 6b3c67fcfcdf5bd9161df294e6c3335d32a5e762 Mon Sep 17 00:00:00 2001
+From: whitebelyash <whbexiumwork@gmail.com>
+Date: Mon, 2 Mar 2026 13:34:05 +0400
+Subject: [PATCH] freedreno/shim: enable drm-shim support for Adreno
+ 810/825/829
+
+Cache sizes for 810&825 should be valid. 829 is unknown, but works so
+far(?)
+
+Signed-off-by: whitebelyash <whbexiumwork@gmail.com>
+---
+ src/freedreno/drm-shim/freedreno_noop.c | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/src/freedreno/drm-shim/freedreno_noop.c b/src/freedreno/drm-shim/freedreno_noop.c
+index a800f365739..906f6e867e0 100644
+--- a/src/freedreno/drm-shim/freedreno_noop.c
++++ b/src/freedreno/drm-shim/freedreno_noop.c
+@@ -318,6 +318,21 @@ static const struct msm_device_info device_infos[] = {
+       .chip_id = 0x44050000,
+       .gmem_size = 12 * 1024 * 1024,
+    },
++   {
++      .gpu_id = 825,
++      .chip_id = 0x44030000,
++      .gmem_size = 2 * 1024 * 1024,
++   },
++   {
++      .gpu_id = 829,
++      .chip_id = 0x44030A20,
++      .gmem_size = 2 * 1024 * 1024,
++   },
++   {
++      .gpu_id = 810,
++      .chip_id = 0x44010000,
++      .gmem_size = 576 * 1024,
++   }
+ };
+ 
+ static void
+From 02e0e81509c76da8b5a623b828c0abc234fa8889 Mon Sep 17 00:00:00 2001
+From: whitebelyash <whbexiumwork@gmail.com>
+Date: Wed, 15 Apr 2026 22:57:20 +0400
+Subject: [PATCH] freedreno/common: enable A825
+
+---
+ src/freedreno/common/freedreno_devices.py | 26 +++++++++++++++++++++++
+ 1 file changed, 26 insertions(+)
+
+diff --git a/src/freedreno/common/freedreno_devices.py b/src/freedreno/common/freedreno_devices.py
+index a74814329fb..452695fc5db 100644
+--- a/src/freedreno/common/freedreno_devices.py
++++ b/src/freedreno/common/freedreno_devices.py
+@@ -1417,6 +1417,32 @@
+         raw_magic_regs = a8xx_base_raw_magic_regs,
+     ))
+ 
++# gen8_6_0
++add_gpus([
++        GPUId(chip_id=0x44030000, name="Adreno (TM) 825"),
++    ], A6xxGPUInfo(
++        CHIP.A8XX,
++        [a7xx_base, a7xx_gen3, a8xx_base, a8xx_gen1, GPUProps(
++            # This is probably not an optimal config for gmem/sysmem, but it was working before and I don't have any a825 device to test (neither I have any trace info)
++            sysmem_ccu_color_cache_fraction = CCUColorCacheFraction.FULL.value,
++            sysmem_per_ccu_color_cache_size = 128 * 1024,
++            sysmem_ccu_depth_cache_fraction = CCUColorCacheFraction.THREE_QUARTER.value,
++            sysmem_per_ccu_depth_cache_size = 96 * 1024,
++        )],
++        num_ccu = 4,
++        num_slices = 2,
++        tile_align_w = 96,
++        tile_align_h = 32,
++        tile_max_w = 16416,
++        tile_max_h = 16384,
++        num_vsc_pipes = 32,
++        cs_shared_mem_size = 32 * 1024,
++        wave_granularity = 2,
++        fibers_per_sp = 128 * 2 * 16,
++        magic_regs = dict(),
++        raw_magic_regs = a8xx_base_raw_magic_regs,
++    ))
++
+ add_gpus([
+         GPUId(chip_id=0x44030a20, name="Adreno (TM) 829"), # KGSL
+     ], A6xxGPUInfo(
+From 1ebd39a498786be2c3acfc7729c2c5bf0c21d7c8 Mon Sep 17 00:00:00 2001
+From: DVD <dmitrijnemov13@gmail.com>
+Date: Wed, 15 Apr 2026 23:44:38 +0300
+Subject: [PATCH] freedreno/common: update a8xx family configs
+
+Signed-off-by: DVD  <dmitrijnemov13@gmail.com>
+
+Add bool gmem_size
+
+Signed-off-by: DVD  <dmitrijnemov13@gmail.com>
+
+Fixing a compilation error
+
+Moved gmem_size to props structure in freedreno_dev_info.h
+
+Signed-off-by: DVD  <dmitrijnemov13@gmail.com>
+
+Adjust tile alignment widths and heights in freedreno_devices
+
+Signed-off-by: DVD  <dmitrijnemov13@gmail.com>
+
+Update GPUProps for a8xx with new features
+
+Signed-off-by: DVD  <dmitrijnemov13@gmail.com>
+
+Update gmem_per_ccu_depth_cache_size value for A829
+
+Changed gmem_per_ccu_depth_cache_size from 192KB to 128KB.
+
+Signed-off-by: DVD  <dmitrijnemov13@gmail.com>
+
+Update freedreno_devices.py
+
+Signed-off-by: DVD  <dmitrijnemov13@gmail.com>
+
+Change gmem_per_ccu_depth_cache_size to 128KB
+
+Signed-off-by: DVD  <dmitrijnemov13@gmail.com>
+
+Update GPU memory cache settings in freedreno_devices.py
+
+Signed-off-by: DVD  <dmitrijnemov13@gmail.com>
+
+Change color and depth cache fractions to HALF
+
+Signed-off-by: DVD  <dmitrijnemov13@gmail.com>
+
+Adjust sysmem per CCU depth cache size
+
+Signed-off-by: DVD  <dmitrijnemov13@gmail.com>
+
+Adjust memory cache sizes and tile alignment
+
+Signed-off-by: DVD  <dmitrijnemov13@gmail.com>
+
+Change tile width alignment from 64 to 96
+
+Signed-off-by: DVD  <dmitrijnemov13@gmail.com>
+
+Adjust cache fraction and tile alignment values
+
+Signed-off-by: DVD  <dmitrijnemov13@gmail.com>
+---
+ src/freedreno/common/freedreno_dev_info.h |  3 ++
+ src/freedreno/common/freedreno_devices.py | 60 +++++++++++++++++++----
+ 2 files changed, 54 insertions(+), 9 deletions(-)
+
+diff --git a/src/freedreno/common/freedreno_dev_info.h b/src/freedreno/common/freedreno_dev_info.h
+index 827be3b78e8..bd6f80ac395 100644
+--- a/src/freedreno/common/freedreno_dev_info.h
++++ b/src/freedreno/common/freedreno_dev_info.h
+@@ -473,6 +473,9 @@ struct fd_dev_info {
+       uint32_t max_storage_buffer_range_bytes;
+       /* If GMEM needs to be disabled for this GPU */
+       bool disable_gmem;
++
++      /* GMEM size in bytes */
++      uint32_t gmem_size;
+ 
+       /* There seems to be a HW bug where a dummy prefetch sam.s2en always
+        * reads its src2 from fiber 0. This may cause faults when fiber 0 is a
+diff --git a/src/freedreno/common/freedreno_devices.py b/src/freedreno/common/freedreno_devices.py
+index 452695fc5db..d9c600ef22c 100644
+--- a/src/freedreno/common/freedreno_devices.py
++++ b/src/freedreno/common/freedreno_devices.py
+@@ -1291,7 +1291,7 @@
+         has_dp2acc = False,
+         reg_size_vec4 = 96,
+         has_rt_workaround = False,
+-        supports_double_threadsize = False,
++        supports_double_threadsize = True,
+         has_dual_wave_dispatch = True,
+         round_robin_errata = False,
+         max_texel_buffer_range_elements = (1 << 29) - 1,
+@@ -1375,18 +1375,32 @@
+        GPUId(chip_id=0xffff44010000, name="Adreno (TM) 810"),
+     ], A6xxGPUInfo(
+         CHIP.A8XX,
+-        [a7xx_base, a7xx_gen3, a8xx_base, a8xx_gen1, GPUProps(
++        [a7xx_base, a7xx_gen3, a8xx_base, a8xx_gen2, GPUProps(
++            sysmem_ccu_color_cache_fraction = CCUColorCacheFraction.FULL.value,
++            sysmem_per_ccu_color_cache_size = 64 * 1024,
++            sysmem_ccu_depth_cache_fraction = CCUColorCacheFraction.THREE_QUARTER.value,
++            sysmem_per_ccu_depth_cache_size = 64 * 1024,
++            gmem_ccu_color_cache_fraction = CCUColorCacheFraction.EIGHTH.value,
++            gmem_per_ccu_color_cache_size = 32 * 1024,
++            gmem_ccu_depth_cache_fraction = CCUColorCacheFraction.FULL.value,
++            gmem_per_ccu_depth_cache_size = 48 * 1024,
++            
+             gmem_vpc_attr_buf_size = 16384,
+             gmem_vpc_pos_buf_size = 12288,
+             gmem_vpc_bv_pos_buf_size = 20480,
+-            # This is possibly also needed for a830 (and all of a8xx),
+-            # move to a8xx_base if confirmed needed for a830.
++
++            reg_size_vec4 = 96, # Для 810 лучше подходить 96, хоть оно и относится ко 2 поколению
++            gmem_size = 576 * 1024,
++            has_ray_intersection = False,
++            has_sw_fuse = False,
+             has_fs_tex_prefetch = False,
++            has_salu_int_narrowing_quirk = True,
++            shading_rate_matches_vk = True,
+         )],
+         num_ccu = 1,
+         num_slices = 1,
+-        tile_align_w = 32,
+-        tile_align_h = 16,
++        tile_align_w = 64,
++        tile_align_h = 32,
+         tile_max_w = 16384,
+         tile_max_h = 16384,
+         num_vsc_pipes = 32,
+@@ -1423,15 +1437,25 @@
+     ], A6xxGPUInfo(
+         CHIP.A8XX,
+         [a7xx_base, a7xx_gen3, a8xx_base, a8xx_gen1, GPUProps(
++            gmem_ccu_color_cache_fraction = CCUColorCacheFraction.HALF.value,
++            gmem_per_ccu_color_cache_size = 128 * 1024,
++            gmem_ccu_depth_cache_fraction = CCUColorCacheFraction.HALF.value,
++            gmem_per_ccu_depth_cache_size = 128 * 1024,
+             # This is probably not an optimal config for gmem/sysmem, but it was working before and I don't have any a825 device to test (neither I have any trace info)
+             sysmem_ccu_color_cache_fraction = CCUColorCacheFraction.FULL.value,
+             sysmem_per_ccu_color_cache_size = 128 * 1024,
+             sysmem_ccu_depth_cache_fraction = CCUColorCacheFraction.THREE_QUARTER.value,
+             sysmem_per_ccu_depth_cache_size = 96 * 1024,
++            gmem_vpc_attr_buf_size = 65536, 
++            gmem_vpc_pos_buf_size = 32768,
++            gmem_vpc_bv_pos_buf_size = 32768,
++            disable_gmem = False,
++            gmem_size = 2 * 1024 * 1024,
++            shading_rate_matches_vk = True,
+         )],
+         num_ccu = 4,
+         num_slices = 2,
+-        tile_align_w = 96,
++        tile_align_w = 64,
+         tile_align_h = 32,
+         tile_max_w = 16416,
+         tile_max_h = 16384,
+@@ -1449,8 +1473,26 @@
+         CHIP.A8XX,
+         [a7xx_base, a7xx_gen3, a8xx_base, a8xx_gen2,
+          GPUProps(
+-            shading_rate_matches_vk = True,  # TODO confirm this
+-            sysmem_vpc_bv_pos_buf_size = 24576,
++            sysmem_vpc_bv_pos_buf_size =  24576, 
++            sysmem_ccu_color_cache_fraction = CCUColorCacheFraction.FULL.value,
++            sysmem_per_ccu_color_cache_size = 128 * 1024,
++            sysmem_ccu_depth_cache_fraction = CCUColorCacheFraction.HALF.value,
++            sysmem_per_ccu_depth_cache_size = 128 * 1024,
++
++            gmem_vpc_attr_buf_size = 49152,
++            gmem_vpc_pos_buf_size = 24576,     
++            gmem_vpc_bv_pos_buf_size = 16384,  
++    
++            gmem_ccu_color_cache_fraction = CCUColorCacheFraction.HALF.value,
++            gmem_per_ccu_color_cache_size = 128 * 1024, 
++            gmem_ccu_depth_cache_fraction = CCUColorCacheFraction.HALF.value,
++            gmem_per_ccu_depth_cache_size = 128 * 1024,
++
++            has_fs_tex_prefetch = False,
++            has_salu_int_narrowing_quirk = True,
++            shading_rate_matches_vk = True, 
++            gmem_size = 2 * 1024 * 1024,
++            enable_tp_ubwc_flag_hint = True,
+          )],
+         num_ccu = 4,
+         num_slices = 2,
+From 005782809509954667dbe685c51e91c5bc96c76c Mon Sep 17 00:00:00 2001
+From: DVD <dmitrijnemov13@gmail.com>
+Date: Fri, 17 Apr 2026 00:00:00 +0300
+Subject: [PATCH] freedreno/common: minor fixes for a810
+
+Signed-off-by: DVD  <dmitrijnemov13@gmail.com>
+
+A810 reg_size 96
+
+Signed-off-by: DVD  <dmitrijnemov13@gmail.com>
+---
+ src/freedreno/common/freedreno_devices.py | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/src/freedreno/common/freedreno_devices.py b/src/freedreno/common/freedreno_devices.py
+index d9c600ef22c..654c6c48cbb 100644
+--- a/src/freedreno/common/freedreno_devices.py
++++ b/src/freedreno/common/freedreno_devices.py
+@@ -1375,7 +1375,10 @@
+        GPUId(chip_id=0xffff44010000, name="Adreno (TM) 810"),
+     ], A6xxGPUInfo(
+         CHIP.A8XX,
+-        [a7xx_base, a7xx_gen3, a8xx_base, a8xx_gen2, GPUProps(
++        [a7xx_base, a7xx_gen3, a8xx_base, a8xx_gen1, GPUProps(
++            sysmem_vpc_attr_buf_size = 131072, 
++            sysmem_vpc_pos_buf_size = 65536,
++            sysmem_vpc_bv_pos_buf_size = 32768,
+             sysmem_ccu_color_cache_fraction = CCUColorCacheFraction.FULL.value,
+             sysmem_per_ccu_color_cache_size = 64 * 1024,
+             sysmem_ccu_depth_cache_fraction = CCUColorCacheFraction.THREE_QUARTER.value,
+@@ -1389,7 +1392,6 @@
+             gmem_vpc_pos_buf_size = 12288,
+             gmem_vpc_bv_pos_buf_size = 20480,
+ 
+-            reg_size_vec4 = 96, # Для 810 лучше подходить 96, хоть оно и относится ко 2 поколению
+             gmem_size = 576 * 1024,
+             has_ray_intersection = False,
+             has_sw_fuse = False,
+From bc16322d4ea1fda95bf8e065ad6191c9ef54257a Mon Sep 17 00:00:00 2001
+From: DVD <dmitrijnemov13@gmail.com>
+Date: Fri, 17 Apr 2026 07:41:25 +0300
+Subject: [PATCH] HACK: tu: disable few features for a810
+
+Hacks hacks hacks, ignore below squash messages
+
+Add chip-specific codegen profiles for Adreno 8xx series with:
+- Reduced max_unroll_iterations (16-32 based on tier)
+- Aggressive FP16 lowering for bandwidth-limited GPUs
+- Register pressure scaling (70-100%) to reduce spills
+- Minimized barriers on A830/A840 for better throughput
+- Optimized delay slots (alu_to_alu=2, non_alu=5, cat3_src2_read=1)
+
+Profiles per GPU:
+- A810: unroll=16, reg_scale=70%, barriers=min, vectorize=yes
+- A825: unroll=24, reg_scale=85%, barriers=min, vectorize=yes
+- A829: unroll=26, reg_scale=85%, barriers=min, vectorize=yes
+- A830: unroll=32, reg_scale=100%, barriers=keep, vectorize=yes
+- A840: unroll=32, reg_scale=100%, barriers=keep, vectorize=yes
+
+Known to be generated with an LLM.
+
+Signed-off-by: DVD  <dmitrijnemov13@gmail.com>
+
+Fix black screen
+
+Signed-off-by: DVD  <dmitrijnemov13@gmail.com>
+
+Relocation from Old Mesa
+
+Signed-off-by: DVD  <dmitrijnemov13@gmail.com>
+
+Update from old mesa
+
+Signed-off-by: DVD  <dmitrijnemov13@gmail.com>
+
+Update from old mesa banch
+
+Signed-off-by: DVD  <dmitrijnemov13@gmail.com>
+---
+ src/freedreno/ir3/ir3_compiler.c    | 39 +++++++++++++++++++-
+ src/freedreno/ir3/ir3_compiler.h    | 55 ++++++++++++++++++++++++++++-
+ src/freedreno/vulkan/tu_pipeline.cc | 20 ++++++++---
+ 3 files changed, 108 insertions(+), 6 deletions(-)
+
+diff --git a/src/freedreno/ir3/ir3_compiler.c b/src/freedreno/ir3/ir3_compiler.c
+index df7f68d8f3bc..b6ff1f70f35d 100644
+--- a/src/freedreno/ir3/ir3_compiler.c
++++ b/src/freedreno/ir3/ir3_compiler.c
+@@ -57,6 +57,34 @@ DEBUG_GET_ONCE_OPTION(ir3_shader_override_path, "IR3_SHADER_OVERRIDE_PATH",
+ enum ir3_shader_debug ir3_shader_debug = 0;
+ const char *ir3_shader_override_path = NULL;
+ 
++struct ir3_gpu_profile
++ir3_get_gpu_profile(uint32_t chip_id)
++{
++    switch (chip_id) {
++    case 0x44010000: /* Adreno 810 */
++        return (struct ir3_gpu_profile){90, 4, 4, false};
++    case 0x44030000: /* Adreno 825 */
++        return (struct ir3_gpu_profile){85, 8, 8, true};
++    case 0x44030A20: /* Adreno 829 */
++        return (struct ir3_gpu_profile){80, 10, 8, true};
++    case 0x44050001: /* Adreno 830 */
++        return (struct ir3_gpu_profile){75, 16, 12, true};
++    case 0x43050A31: /* Adreno 830 variant */
++        return (struct ir3_gpu_profile){75, 16, 12, true};
++    case 0x43050A32: /* Adreno 840 */
++        return (struct ir3_gpu_profile){70, 20, 16, true};
++    default:
++        return (struct ir3_gpu_profile){85, 8, 8, false};
++    }
++}
++
++uint32_t
++ir3_effective_reg_size(struct ir3_compiler *compiler)
++{
++    struct ir3_gpu_profile profile = ir3_get_gpu_profile(compiler->dev_id->chip_id);
++    return compiler->reg_size_vec4 * profile.reg_efficiency / 100;
++}
++
+ void
+ ir3_compiler_destroy(struct ir3_compiler *compiler)
+ {
+@@ -217,6 +245,12 @@ ir3_compiler_debug_init(void)
+    util_call_once(&once, __debug_init);
+ }
+ 
++static inline bool
++ir3_is_a810(const struct fd_dev_id *dev_id)
++{
++   return dev_id->chip_id == 0x44010000;
++}
++
+ struct ir3_compiler *
+ ir3_compiler_create(struct fd_device *dev, const struct fd_dev_id *dev_id,
+                     const struct fd_dev_info *dev_info,
+@@ -233,6 +267,9 @@ ir3_compiler_create(struct fd_device *dev, const struct fd_dev_id *dev_id,
+    compiler->options = *options;
+    compiler->info = dev_info;
+ 
++   if (ir3_is_a810(dev_id))
++      ir3_shader_debug |= IR3_DBG_NODESCPREFETCH;
++
+    /* TODO see if older GPU's were different here */
+    compiler->branchstack_size = dev_info->props.has_dual_wave_dispatch ? 512 : 256;
+    compiler->max_branchstack = 64;
+@@ -456,4 +493,4 @@ const char *
+ ir3_shader_debug_as_string()
+ {
+    return debug_dump_flags(shader_debug_options, ir3_shader_debug);
+-}
++}
+\ No newline at end of file
+diff --git a/src/freedreno/ir3/ir3_compiler.h b/src/freedreno/ir3/ir3_compiler.h
+index 2a581a26a509..1189ca6d5f48 100644
+--- a/src/freedreno/ir3/ir3_compiler.h
++++ b/src/freedreno/ir3/ir3_compiler.h
+@@ -58,6 +58,13 @@ struct ir3_compiler_options {
+    uint64_t uche_trap_base;
+ };
+ 
++struct ir3_gpu_profile {
++    uint32_t reg_efficiency;
++    uint32_t max_sy_inflight;
++    uint32_t max_ss_inflight;
++    bool force_double_threadsize;
++};
++
+ struct ir3_compiler {
+    struct fd_device *dev;
+    const struct fd_dev_id *dev_id;
+@@ -389,6 +396,52 @@ void ir3_shader_bisect_dump_id(struct ir3_shader_variant *v);
+ bool ir3_shader_bisect_select(struct ir3_shader_variant *v);
+ bool ir3_shader_bisect_disasm_select(struct ir3_shader_variant *v);
+ 
++/* ========== A8XX HELPER FUNCTIONS ========== */
++
++struct ir3_gpu_profile;
++struct ir3_gpu_profile ir3_get_gpu_profile(uint32_t chip_id);
++uint32_t ir3_effective_reg_size(struct ir3_compiler *compiler);
++
++static inline bool
++ir3_force_double_threadsize(struct ir3_compiler *compiler)
++{
++   if (compiler->gen >= 8) {
++      struct ir3_gpu_profile profile = ir3_get_gpu_profile(compiler->dev_id->chip_id);
++      return profile.force_double_threadsize;
++   }
++   return compiler->info->props.supports_double_threadsize;
++}
++
++/* Helper function to check if A8XX should use aggressive const limits */
++static inline bool
++ir3_use_aggressive_const_limits(struct ir3_compiler *compiler)
++{
++   return compiler->gen >= 8;
++}
++
++/* Helper function to get optimal delay slots for current gen */
++static inline unsigned
++ir3_get_alu_to_alu_delay(struct ir3_compiler *compiler)
++{
++   if (compiler->gen >= 8)
++      return 1;
++   if (compiler->gen >= 7)
++      return 2;
++   return 3;
++}
++
++static inline unsigned
++ir3_get_non_alu_delay(struct ir3_compiler *compiler)
++{
++   if (compiler->gen >= 8)
++      return 4;
++   if (compiler->gen >= 7)
++      return 5;
++   return 6;
++}
++
++/* ========== END A8XX HELPER FUNCTIONS ========== */
++
+ ENDC;
+ 
+-#endif /* IR3_COMPILER_H_ */
++#endif /* IR3_COMPILER_H_ */
+\ No newline at end of file
+diff --git a/src/freedreno/vulkan/tu_pipeline.cc b/src/freedreno/vulkan/tu_pipeline.cc
+index dba43f9a9c96..46508f0c0c82 100644
+--- a/src/freedreno/vulkan/tu_pipeline.cc
++++ b/src/freedreno/vulkan/tu_pipeline.cc
+@@ -1743,6 +1743,14 @@ tu_pipeline_builder_compile_shaders(struct tu_pipeline_builder *builder,
+    };
+    VkPipelineCreationFeedback stage_feedbacks[MESA_SHADER_STAGES] = { 0 };
+ 
++   /* === ДОБАВЛЕНО: Идентификация GPU Adreno 8xx === */
++   const uint64_t chip_id = builder->device->physical_device->dev_id.chip_id;
++   const bool is_a810 = chip_id == 0x44010000ull;
++   const bool is_a825 = chip_id == 0x44030000ull;
++   const bool is_a829 = chip_id == 0x44030A20ull;
++   const bool is_target_gpu = is_a810 || is_a825 || is_a829;
++   /* === КОНЕЦ ДОБАВЛЕНИЯ === */
++
+    const bool executable_info =
+       builder->create_flags &
+       VK_PIPELINE_CREATE_2_CAPTURE_INTERNAL_REPRESENTATIONS_BIT_KHR;
+@@ -1849,8 +1857,9 @@ tu_pipeline_builder_compile_shaders(struct tu_pipeline_builder *builder,
+ 
+    if (builder->state &
+        VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT) {
++      /* === ИЗМЕНЕНО: Отключаем custom_resolve на A810 === */
+       keys[MESA_SHADER_FRAGMENT].custom_resolve =
+-         builder->graphics_state.rp->custom_resolve;
++         is_a810 ? false : builder->graphics_state.rp->custom_resolve;
+ 
+       if (builder->device->physical_device->instance->drirc.misc.emulate_alpha_to_coverage) {
+          keys[MESA_SHADER_FRAGMENT].emulate_alpha_to_coverage = true;
+@@ -1903,7 +1912,9 @@ tu_pipeline_builder_compile_shaders(struct tu_pipeline_builder *builder,
+          }
+       }
+ 
+-      keys[last_pre_rast_stage].fdm_per_layer = builder->fdm_per_layer;
++      /* === ИЗМЕНЕНО: Отключаем FDM per layer на A810 === */
++      keys[last_pre_rast_stage].fdm_per_layer =
++         is_a810 ? false : builder->fdm_per_layer;
+    }
+ 
+    if (builder->state & VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT) {
+@@ -1944,8 +1955,9 @@ tu_pipeline_builder_compile_shaders(struct tu_pipeline_builder *builder,
+        * just checked in tu6_emit_fs_inputs.  We will also copy the value to
+        * tu_shader_key::force_sample_interp in a bit.
+        */
++      /* === ИЗМЕНЕНО: Отключаем force_sample_interp на A810 === */
+       keys[MESA_SHADER_FRAGMENT].force_sample_interp =
+-         !builder->rasterizer_discard && msaa_info && msaa_info->sampleShadingEnable;
++         is_a810 ? false : (!builder->rasterizer_discard && msaa_info && msaa_info->sampleShadingEnable);
+    }
+ 
+    unsigned char pipeline_blake3[BLAKE3_KEY_LEN];
+@@ -5270,4 +5282,4 @@ tu_GetPipelineExecutableInternalRepresentationsKHR(
+    }
+ 
+    return incomplete_text ? VK_INCOMPLETE : vk_outarray_status(&out);
+-}
++}
+\ No newline at end of file
+From 49c3da3f40ce7322e7ba8a55e1401a69e231f9e6 Mon Sep 17 00:00:00 2001
+From: whitebelyash <whbexiumwork@gmail.com>
+Date: Tue, 5 May 2026 22:25:10 +0400
+Subject: [PATCH] HACK: tu: enforce TU_DEBUG=nocb (disable concurrent binning)
+
+Per Mesa talks this one is generally useful for Android native
+applications (i.e. TBR optimized), however, it's useless or even bad for
+anything IMR/PC. Let's disable this.
+---
+ src/freedreno/vulkan/tu_device.cc | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/src/freedreno/vulkan/tu_device.cc b/src/freedreno/vulkan/tu_device.cc
+index 9c8dabd1542..5b9bc71609f 100644
+--- a/src/freedreno/vulkan/tu_device.cc
++++ b/src/freedreno/vulkan/tu_device.cc
+@@ -2868,6 +2868,9 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
+       vk_device_dispatch_table_from_entrypoints(
+          &dispatch_table, &tu_device_entrypoints_a8xx, false);
+    }
++   
++   /* HACK: disable concurrent binning for now */
++   tu_env.debug |= TU_DEBUG_NO_CONCURRENT_BINNING;
+ 
+    vk_device_dispatch_table_from_entrypoints(
+       &dispatch_table, &wsi_device_entrypoints, false);
+From 2a0281b44ed59d9f2d1fb6bb58ab830be3f7145b Mon Sep 17 00:00:00 2001
+From: DVD <disk_dvd@outlook.com>
+Date: Tue, 2 Jun 2026 07:31:07 +0300
+Subject: [PATCH] freedreno/common: Fix offsets for A825/829
+
+These values were taken from A825 dumps, since A829 and A825 are quite similar, so I assumed that the offset:
+gmem_vpc_bv_pos_buf_size = 32768,
+---
+ src/freedreno/common/freedreno_devices.py | 10 ++++++----
+ 1 file changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/src/freedreno/common/freedreno_devices.py b/src/freedreno/common/freedreno_devices.py
+index 654c6c48cbb..cf98a20986b 100644
+--- a/src/freedreno/common/freedreno_devices.py
++++ b/src/freedreno/common/freedreno_devices.py
+@@ -1443,14 +1443,16 @@
+             gmem_per_ccu_color_cache_size = 128 * 1024,
+             gmem_ccu_depth_cache_fraction = CCUColorCacheFraction.HALF.value,
+             gmem_per_ccu_depth_cache_size = 128 * 1024,
+-            # This is probably not an optimal config for gmem/sysmem, but it was working before and I don't have any a825 device to test (neither I have any trace info)
++            
+             sysmem_ccu_color_cache_fraction = CCUColorCacheFraction.FULL.value,
+             sysmem_per_ccu_color_cache_size = 128 * 1024,
+             sysmem_ccu_depth_cache_fraction = CCUColorCacheFraction.THREE_QUARTER.value,
+             sysmem_per_ccu_depth_cache_size = 96 * 1024,
+-            gmem_vpc_attr_buf_size = 65536, 
+-            gmem_vpc_pos_buf_size = 32768,
++            
++            gmem_vpc_attr_buf_size = 49152, 
++            gmem_vpc_pos_buf_size = 24576,
+             gmem_vpc_bv_pos_buf_size = 32768,
++            
+             disable_gmem = False,
+             gmem_size = 2 * 1024 * 1024,
+             shading_rate_matches_vk = True,
+@@ -1483,7 +1485,7 @@
+ 
+             gmem_vpc_attr_buf_size = 49152,
+             gmem_vpc_pos_buf_size = 24576,     
+-            gmem_vpc_bv_pos_buf_size = 16384,  
++            gmem_vpc_bv_pos_buf_size = 32768,  
+     
+             gmem_ccu_color_cache_fraction = CCUColorCacheFraction.HALF.value,
+             gmem_per_ccu_color_cache_size = 128 * 1024, 
+From d854a45405d71f3b49be1e41b1ee268d06f1f52b Mon Sep 17 00:00:00 2001
+From: DVD <disk_dvd@outlook.com>
+Date: Tue, 2 Jun 2026 07:33:48 +0300
+Subject: [PATCH] tu/pipeline: enable custom resolve for A810, off MSAA, FDM
+ for A810,825,829,830
+
+As practice has shown, this gives an increase in dx12 games, but does not provide any increase in dx11 In games, artifacts don't appear. This applies to the A810-830, I think because they have the same blob. That is, there's no increase on the A840.
+---
+ src/freedreno/vulkan/tu_pipeline.cc | 16 ++++++----------
+ 1 file changed, 6 insertions(+), 10 deletions(-)
+
+diff --git a/src/freedreno/vulkan/tu_pipeline.cc b/src/freedreno/vulkan/tu_pipeline.cc
+index 46508f0c0c82..219fff57c21c 100644
+--- a/src/freedreno/vulkan/tu_pipeline.cc
++++ b/src/freedreno/vulkan/tu_pipeline.cc
+@@ -1743,13 +1743,12 @@ tu_pipeline_builder_compile_shaders(struct tu_pipeline_builder *builder,
+    };
+    VkPipelineCreationFeedback stage_feedbacks[MESA_SHADER_STAGES] = { 0 };
+ 
+-   /* === ДОБАВЛЕНО: Идентификация GPU Adreno 8xx === */
+    const uint64_t chip_id = builder->device->physical_device->dev_id.chip_id;
+    const bool is_a810 = chip_id == 0x44010000ull;
+    const bool is_a825 = chip_id == 0x44030000ull;
+    const bool is_a829 = chip_id == 0x44030A20ull;
+-   const bool is_target_gpu = is_a810 || is_a825 || is_a829;
+-   /* === КОНЕЦ ДОБАВЛЕНИЯ === */
++   const bool is_a830 = chip_id == 0xffff44050000 || 0x44050001;
++   const bool is_target_gpu = is_a810 || is_a825 || is_a829 || is_a830;
+ 
+    const bool executable_info =
+       builder->create_flags &
+@@ -1857,9 +1856,8 @@ tu_pipeline_builder_compile_shaders(struct tu_pipeline_builder *builder,
+ 
+    if (builder->state &
+        VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT) {
+-      /* === ИЗМЕНЕНО: Отключаем custom_resolve на A810 === */
+       keys[MESA_SHADER_FRAGMENT].custom_resolve =
+-         is_a810 ? false : builder->graphics_state.rp->custom_resolve;
++         builder->graphics_state.rp->custom_resolve;
+ 
+       if (builder->device->physical_device->instance->drirc.misc.emulate_alpha_to_coverage) {
+          keys[MESA_SHADER_FRAGMENT].emulate_alpha_to_coverage = true;
+@@ -1912,9 +1910,8 @@ tu_pipeline_builder_compile_shaders(struct tu_pipeline_builder *builder,
+          }
+       }
+ 
+-      /* === ИЗМЕНЕНО: Отключаем FDM per layer на A810 === */
+       keys[last_pre_rast_stage].fdm_per_layer =
+-         is_a810 ? false : builder->fdm_per_layer;
++         is_target_gpu ? false : builder->fdm_per_layer;
+    }
+ 
+    if (builder->state & VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT) {
+@@ -1955,9 +1952,8 @@ tu_pipeline_builder_compile_shaders(struct tu_pipeline_builder *builder,
+        * just checked in tu6_emit_fs_inputs.  We will also copy the value to
+        * tu_shader_key::force_sample_interp in a bit.
+        */
+-      /* === ИЗМЕНЕНО: Отключаем force_sample_interp на A810 === */
+       keys[MESA_SHADER_FRAGMENT].force_sample_interp =
+-         is_a810 ? false : (!builder->rasterizer_discard && msaa_info && msaa_info->sampleShadingEnable);
++         is_target_gpu ? false : (!builder->rasterizer_discard && msaa_info && msaa_info->sampleShadingEnable);
+    }
+ 
+    unsigned char pipeline_blake3[BLAKE3_KEY_LEN];
+@@ -5282,4 +5278,4 @@ tu_GetPipelineExecutableInternalRepresentationsKHR(
+    }
+ 
+    return incomplete_text ? VK_INCOMPLETE : vk_outarray_status(&out);
+-}
+\ No newline at end of file
++}
+From d96a891e1760a00aaa0763453443437f69d15563 Mon Sep 17 00:00:00 2001
+From: DVD <disk_dvd@outlook.com>
+Date: Sat, 30 May 2026 10:30:06 +0300
+Subject: [PATCH] ir3: coalesce UBO promotion ranges on Adreno 810
+
+---
+ src/freedreno/ir3/ir3_compiler.c              |  8 ++++
+ src/freedreno/ir3/ir3_compiler.h              |  7 ++++
+ .../ir3/ir3_nir_analyze_ubo_ranges.c          | 39 ++++++++++++++-----
+ 3 files changed, 45 insertions(+), 9 deletions(-)
+
+diff --git a/src/freedreno/ir3/ir3_compiler.c b/src/freedreno/ir3/ir3_compiler.c
+index b6ff1f70f35d..24a935e3ad4c 100644
+--- a/src/freedreno/ir3/ir3_compiler.c
++++ b/src/freedreno/ir3/ir3_compiler.c
+@@ -419,6 +419,14 @@ ir3_compiler_create(struct fd_device *dev, const struct fd_dev_id *dev_id,
+    compiler->has_bitwise_triops = compiler->gen >= 5;
+    compiler->cat3_rel_offset_0_quirk = compiler->gen <= 5;
+ 
++   /*
++    * Adreno 810 has a much smaller cache/GMEM budget and substantially lower
++    * external memory bandwidth than the larger A8xx parts. Let the UBO
++    * promotion pass spend a few extra const-file slots merging nearby ranges
++    * so hot shader code issues fewer memory-backed UBO reads.
++    */
++   compiler->coalesce_ubo_push_ranges = dev_id->chip_id == 0xffff44010000ull;
++
+    /* The driver can't request this unless preambles are supported. */
+    if (options->push_ubo_with_preamble)
+       assert(compiler->has_preamble);
+diff --git a/src/freedreno/ir3/ir3_compiler.h b/src/freedreno/ir3/ir3_compiler.h
+index 1189ca6d5f48..7499076bc11a 100644
+--- a/src/freedreno/ir3/ir3_compiler.h
++++ b/src/freedreno/ir3/ir3_compiler.h
+@@ -246,6 +246,13 @@ struct ir3_compiler {
+ 
+    bool cat3_rel_offset_0_quirk;
+ 
++   /*
++    * Some low-bandwidth parts benefit from spending a little more constant
++    * file space to merge nearby promoted UBO ranges. This reduces the number
++    * of memory-backed UBO fetch windows left in hot shader code.
++    */
++   bool coalesce_ubo_push_ranges;
++
+    struct {
+       /* The number of cycles needed for the result of one ALU operation to be
+        * available to another ALU operation. Only valid when the halfness of the
+diff --git a/src/freedreno/ir3/ir3_nir_analyze_ubo_ranges.c b/src/freedreno/ir3/ir3_nir_analyze_ubo_ranges.c
+index aa6b04693f3a..af2abd0bc8e9 100644
+--- a/src/freedreno/ir3/ir3_nir_analyze_ubo_ranges.c
++++ b/src/freedreno/ir3/ir3_nir_analyze_ubo_ranges.c
+@@ -96,7 +96,8 @@ get_existing_range(nir_intrinsic_instr *instr,
+  * newly updated range.
+  */
+ static void
+-merge_neighbors(struct ir3_ubo_analysis_state *state, int index)
++merge_neighbors(struct ir3_ubo_analysis_state *state, int index,
++                uint32_t max_coalesce_gap)
+ {
+    struct ir3_ubo_range *a = &state->range[index];
+ 
+@@ -108,7 +109,13 @@ merge_neighbors(struct ir3_ubo_analysis_state *state, int index)
+       if (memcmp(&a->ubo, &b->ubo, sizeof(a->ubo)))
+          continue;
+ 
+-      if (a->start > b->end || a->end < b->start)
++      uint32_t gap = 0;
++      if (a->end < b->start)
++         gap = b->start - a->end;
++      else if (b->end < a->start)
++         gap = a->start - b->end;
++
++      if (gap > max_coalesce_gap)
+          continue;
+ 
+       /* Merge B into A. */
+@@ -130,7 +137,7 @@ merge_neighbors(struct ir3_ubo_analysis_state *state, int index)
+ static void
+ gather_ubo_ranges(nir_shader *nir, nir_intrinsic_instr *instr,
+                   struct ir3_ubo_analysis_state *state, uint32_t alignment,
+-                  uint32_t *upload_remaining)
++                  uint32_t max_coalesce_gap, uint32_t *upload_remaining)
+ {
+    struct ir3_ubo_info ubo = {};
+    if (!get_ubo_info(instr, &ubo))
+@@ -146,10 +153,19 @@ gather_ubo_ranges(nir_shader *nir, nir_intrinsic_instr *instr,
+       if (memcmp(&plan_r->ubo, &ubo, sizeof(ubo)))
+          continue;
+ 
+-      /* Don't extend existing uploads unless they're
+-       * neighboring/overlapping.
++      /* Don't extend existing uploads unless they're neighboring/overlapping.
++       * On bandwidth-limited GPUs, allow a small hole between ranges. The
++       * preamble may copy a few unused dwords, but hot shader code can then
++       * source nearby UBO loads from the constant file instead of issuing more
++       * memory-backed UBO reads.
+        */
+-      if (r.start > plan_r->end || r.end < plan_r->start)
++      uint32_t gap = 0;
++      if (plan_r->end < r.start)
++         gap = r.start - plan_r->end;
++      else if (r.end < plan_r->start)
++         gap = plan_r->start - r.end;
++
++      if (gap > max_coalesce_gap)
+          continue;
+ 
+       r.start = MIN2(r.start, plan_r->start);
+@@ -163,7 +179,7 @@ gather_ubo_ranges(nir_shader *nir, nir_intrinsic_instr *instr,
+       plan_r->end = r.end;
+       *upload_remaining -= added;
+ 
+-      merge_neighbors(state, i);
++      merge_neighbors(state, i, max_coalesce_gap);
+       return;
+    }
+ 
+@@ -561,7 +577,7 @@ ir3_nir_lower_const_global_loads(nir_shader *nir, struct ir3_shader_variant *v)
+                if (instr_is_load_const(instr) &&
+                    ir3_def_is_rematerializable_for_preamble(nir_instr_as_intrinsic(instr)->src[0].ssa, NULL))
+                   gather_ubo_ranges(nir, nir_instr_as_intrinsic(instr), &state,
+-                                    align_vec4,
++                                    align_vec4, 0,
+                                     &upload_remaining);
+             }
+          }
+@@ -635,6 +651,11 @@ ir3_nir_analyze_ubo_ranges(nir_shader *nir, struct ir3_shader_variant *v)
+       return;
+ 
+    uint32_t upload_remaining = max_upload;
++   /* A810 is especially external-bandwidth constrained. When promoting UBO
++    * loads on that GPU, coalesce ranges separated by up to 128 bytes (8 vec4s)
++    * so repeated per-invocation loads are more likely to hit the const file.
++    */
++   uint32_t max_coalesce_gap = compiler->coalesce_ubo_push_ranges ? 128 : 0;
+    bool push_ubos = compiler->options.push_ubo_with_preamble;
+ 
+    nir_foreach_function (function, nir) {
+@@ -643,7 +664,7 @@ ir3_nir_analyze_ubo_ranges(nir_shader *nir, struct ir3_shader_variant *v)
+             nir_foreach_instr (instr, block) {
+                if (instr_is_load_ubo(instr))
+                   gather_ubo_ranges(nir, nir_instr_as_intrinsic(instr), state,
+-                                    align_vec4,
++                                    align_vec4, max_coalesce_gap,
+                                     &upload_remaining);
+             }
+          }

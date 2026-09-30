@@ -1,0 +1,223 @@
+From: maxjivi05 <maxjividen@gmail.com>
+Subject: [PATCH 6/6] tu/kgsl: Cache retired A8XX IB storage
+
+Avoid repeated alias unbind/free churn during active rendering. Cache only
+last-reference IB allocations, match allocation properties on reuse, bound
+idle storage, and release all entries at device destruction.
+
+---
+--- a/src/freedreno/vulkan/tu_knl_kgsl.cc
++++ b/src/freedreno/vulkan/tu_knl_kgsl.cc
+@@ -384,6 +384,89 @@
+    safe_ioctl(fd, IOCTL_KGSL_GPUMEM_FREE_ID, &req);
+ }
+ 
++/* Repeatedly unbinding/freeing A8XX IB storage can invalidate the GPU context
++ * during gameplay even with virtual aliases. Reuse retired storage instead.
++ * This does not extend command-buffer execution lifetimes: only BOs whose last
++ * reference has been dropped enter the cache, just like the suballocator cache.
++ *
++ * Limit idle storage to 256 MiB; live BOs remain outside this cache. Entries own
++ * raw kernel objects, not bo_map pointers, so device-init error cleanup is safe.
++ */
++#define KGSL_IB_CACHE_MAX_BYTES (256ull * 1024 * 1024)
++struct kgsl_ib_cache_entry {
++   struct kgsl_ib_cache_entry *next;
++   uint32_t handle, alias, flags;
++   uint64_t size, iova, requested_size;
++};
++
++struct kgsl_ib_cache {
++   mtx_t mutex;
++   struct kgsl_ib_cache_entry *head;
++   uint64_t bytes;
++   uint32_t hits;
++};
++
++static bool
++kgsl_ib_cache_take(struct tu_device *dev, uint64_t size, uint64_t align,
++                   uint32_t flags, struct kgsl_ib_cache_entry *out)
++{
++   struct kgsl_ib_cache *cache = dev->kgsl_ib_cache;
++   if (!cache)
++      return false;
++   mtx_lock(&cache->mutex);
++   struct kgsl_ib_cache_entry **link = &cache->head;
++   while (*link) {
++      struct kgsl_ib_cache_entry *entry = *link;
++      if (entry->requested_size == size && entry->flags == flags &&
++          (!align || entry->iova % align == 0)) {
++         *link = entry->next;
++         cache->bytes -= entry->size;
++         *out = *entry;
++         free(entry);
++         if ((cache->hits++ % 1024) == 0)
++            mesa_logd("KGSL IB cache: reuses=%u idle_KiB=%llu",
++                      cache->hits, (unsigned long long)(cache->bytes / 1024));
++         mtx_unlock(&cache->mutex);
++         return true;
++      }
++      link = &entry->next;
++   }
++   mtx_unlock(&cache->mutex);
++   return false;
++}
++
++static bool
++kgsl_ib_cache_put(struct tu_device *dev, struct tu_bo *bo)
++{
++   struct kgsl_ib_cache *cache = dev->kgsl_ib_cache;
++   if (!cache || !bo->alias_handle)
++      return false;
++   struct kgsl_ib_cache_entry *entry = (struct kgsl_ib_cache_entry *)malloc(sizeof(*entry));
++   if (!entry)
++      return false;
++   mtx_lock(&cache->mutex);
++   if (cache->bytes + bo->size > KGSL_IB_CACHE_MAX_BYTES) {
++      mtx_unlock(&cache->mutex);
++      free(entry);
++      return false;
++   }
++   *entry = (struct kgsl_ib_cache_entry) {
++      .next = cache->head,
++      .handle = bo->gem_handle,
++      .alias = bo->alias_handle,
++      .flags = bo->kgsl_alloc_flags,
++      .size = bo->size,
++      .iova = bo->iova,
++      .requested_size = bo->kgsl_alloc_size,
++   };
++   /* Clear the sparse-array slot before publishing it to another thread. */
++   memset(bo, 0, sizeof(*bo));
++   cache->head = entry;
++   cache->bytes += entry->size;
++   mtx_unlock(&cache->mutex);
++   return true;
++}
++
+ static VkResult
+ kgsl_bo_init(struct tu_device *dev,
+              struct vk_object_base *base,
+@@ -445,10 +528,21 @@
+    if (flags & TU_BO_ALLOC_NO_32B_ROLLOVER)
+       req.flags |= KGSL_MEMFLAGS_FORCE_32BIT;
+ 
+-   int ret;
+-
+-   ret = safe_ioctl(dev->physical_device->local_fd,
+-                    IOCTL_KGSL_GPUMEM_ALLOC_ID, &req);
++   /* KGSL may normalize returned flags; key by the original request. */
++   const uint32_t requested_flags = req.flags;
++   struct kgsl_ib_cache_entry cached = {};
++   bool reused = !lazy_vma && !(flags & TU_BO_ALLOC_REPLAYABLE) &&
++      kgsl_bo_needs_alias(dev, flags) &&
++      kgsl_ib_cache_take(dev, size, align, req.flags, &cached);
++   int ret = 0;
++   if (reused) {
++      req.id = cached.handle;
++      req.mmapsize = cached.size;
++      req.gpuaddr = cached.iova;
++   } else {
++      ret = safe_ioctl(dev->physical_device->local_fd,
++                       IOCTL_KGSL_GPUMEM_ALLOC_ID, &req);
++   }
+    if (ret) {
+       return vk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
+                        "GPUMEM_ALLOC_ID failed (%s)", strerror(errno));
+@@ -464,6 +558,9 @@
+       .name = tu_debug_bos_add(dev, req.mmapsize, name),
+       .refcnt = 1,
+       .shared_fd = -1,
++      .alias_handle = cached.alias,
++      .kgsl_alloc_flags = requested_flags,
++      .kgsl_alloc_size = size,
+       .base = base,
+    };
+ 
+@@ -475,7 +572,7 @@
+       result = kgsl_sparse_vma_map(dev, lazy_vma, bo, 0);
+    } else if (flags & TU_BO_ALLOC_REPLAYABLE) {
+       result = kgsl_bo_user_map(dev, bo, client_iova);
+-   } else if (kgsl_bo_needs_alias(dev, flags)) {
++   } else if (!reused && kgsl_bo_needs_alias(dev, flags)) {
+       result = kgsl_bo_create_alias(dev, bo, align);
+       if (result != VK_SUCCESS)
+          kgsl_bo_finish(dev, bo);
+@@ -614,6 +711,9 @@
+       close(bo->shared_fd);
+ 
+    TU_RMV(bo_destroy, dev, bo);
++
++   if (kgsl_ib_cache_put(dev, bo))
++      return;
+ 
+    if (bo->alias_handle)
+       kgsl_bo_destroy_alias(dev, bo);
+@@ -1865,13 +1965,42 @@
+ kgsl_device_init(struct tu_device *dev)
+ {
+    dev->fd = dev->physical_device->local_fd;
++   if (dev->physical_device->info->chip >= A8XX &&
++       dev->physical_device->has_sparse &&
++       debug_get_bool_option("TU_KGSL_IB_CACHE", true)) {
++      dev->kgsl_ib_cache = (struct kgsl_ib_cache *)calloc(1, sizeof(struct kgsl_ib_cache));
++      if (!dev->kgsl_ib_cache)
++         return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
++      if (mtx_init(&dev->kgsl_ib_cache->mutex, mtx_plain) != thrd_success) {
++         free(dev->kgsl_ib_cache);
++         dev->kgsl_ib_cache = NULL;
++         return vk_error(dev, VK_ERROR_OUT_OF_HOST_MEMORY);
++      }
++   }
+    return VK_SUCCESS;
+ }
+ 
+ static void
+ kgsl_device_finish(struct tu_device *dev)
+ {
+-   /* No-op */
++   struct kgsl_ib_cache *cache = dev->kgsl_ib_cache;
++   if (!cache)
++      return;
++   for (struct kgsl_ib_cache_entry *entry = cache->head; entry;) {
++      struct kgsl_ib_cache_entry *next = entry->next;
++      struct tu_bo bo = {};
++      bo.gem_handle = entry->handle;
++      bo.alias_handle = entry->alias;
++      bo.size = entry->size;
++      kgsl_bo_destroy_alias(dev, &bo);
++      struct kgsl_gpumem_free_id req = { .id = entry->handle };
++      safe_ioctl(dev->physical_device->local_fd, IOCTL_KGSL_GPUMEM_FREE_ID, &req);
++      free(entry);
++      entry = next;
++   }
++   mtx_destroy(&cache->mutex);
++   free(cache);
++   dev->kgsl_ib_cache = NULL;
+ }
+ 
+ static int
+--- a/src/freedreno/vulkan/tu_knl.h
++++ b/src/freedreno/vulkan/tu_knl.h
+@@ -60,6 +60,8 @@
+ 
+    /* Virtual BO the GPU accesses this BO through, or 0 if none. */
+    uint32_t alias_handle;
++   uint32_t kgsl_alloc_flags;
++   uint64_t kgsl_alloc_size;
+ #endif
+ 
+    bool implicit_sync : 1;
+--- a/src/freedreno/vulkan/tu_device.h
++++ b/src/freedreno/vulkan/tu_device.h
+@@ -360,6 +360,10 @@
+     */
+    struct tu_suballocator kgsl_profiling_suballoc;
+    mtx_t kgsl_profiling_mutex;
++
++#ifdef TU_HAS_KGSL
++   struct kgsl_ib_cache *kgsl_ib_cache;
++#endif
+ 
+    /* VkEvent BO suballocator.  Synchronized by event_mutex.
+     */

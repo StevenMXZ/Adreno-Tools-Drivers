@@ -1,0 +1,35 @@
+diff --git a/src/freedreno/vulkan/tu_knl_kgsl.cc b/src/freedreno/vulkan/tu_knl_kgsl.cc
+index 44af0c2..95af223 100644
+--- a/src/freedreno/vulkan/tu_knl_kgsl.cc
++++ b/src/freedreno/vulkan/tu_knl_kgsl.cc
+@@ -1124,9 +1124,13 @@ kgsl_syncobj_merge(const struct kgsl_syncobj **syncobjs, uint32_t count)
+             if (ret.queue == sync->queue) {
+                ret.timestamp = max_ts(ret.timestamp, sync->timestamp);
+             } else {
+-               ret.state = KGSL_SYNCOBJ_STATE_FD;
++               /* Two queues: both timestamps become fences before they can be
++                * merged; ret's own fd is not valid while it is a timestamp.
++                */
++               int ret_fd = kgsl_syncobj_ts_to_fd(&ret);
+                int sync_fd = kgsl_syncobj_ts_to_fd(sync);
+-               ret.fd = sync_merge_close("tu_sync", ret.fd, sync_fd, true);
++               ret.state = KGSL_SYNCOBJ_STATE_FD;
++               ret.fd = sync_merge_close("tu_sync", ret_fd, sync_fd, true);
+                assert(ret.fd >= 0);
+             }
+          } else if (ret.state == KGSL_SYNCOBJ_STATE_FD) {
+@@ -1143,9 +1147,12 @@ kgsl_syncobj_merge(const struct kgsl_syncobj **syncobjs, uint32_t count)
+             ret.fd = sync_merge_close("tu_sync", ret.fd, sync->fd, false);
+             assert(ret.fd >= 0);
+          } else if (ret.state == KGSL_SYNCOBJ_STATE_TS) {
++            /* It is ret, the timestamp, that turns into a fence here: sync is
++             * already an fd (converting it read a queue it does not have).
++             */
++            int ret_fd = kgsl_syncobj_ts_to_fd(&ret);
+             ret.state = KGSL_SYNCOBJ_STATE_FD;
+-            int sync_fd = kgsl_syncobj_ts_to_fd(sync);
+-            ret.fd = sync_merge_close("tu_sync", ret.fd, sync_fd, true);
++            ret.fd = sync_merge_close("tu_sync", ret_fd, sync->fd, false);
+             assert(ret.fd >= 0);
+          } else {
+             ret = *sync;

@@ -1,0 +1,130 @@
+name: Build Turnip Android Variants
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      mesa_commit: ${{ steps.mesa.outputs.commit }}
+    steps:
+      - name: Resolve Mesa main
+        id: mesa
+        run: |
+          COMMIT=$(git ls-remote https://gitlab.freedesktop.org/mesa/mesa.git refs/heads/main | awk '{print $1}')
+          test -n "$COMMIT"
+          echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
+          echo "Mesa commit: $COMMIT"
+
+  build:
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: a7xx
+            artifact: Turnip-A7xx
+          - variant: a7xx-oneui
+            artifact: Turnip-A7xx-OneUI-Glitch
+          - variant: a8xx-patchs2
+            artifact: Turnip-A8xx-Patchs2
+          - variant: a8xx-patchs1
+            artifact: Turnip-A8xx-Patched-Patchs1
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ninja-build \
+            patchelf \
+            unzip \
+            flex \
+            bison \
+            git \
+            perl \
+            python3-pip \
+            glslang-tools \
+            curl \
+            zip \
+            patch \
+            clang \
+            lld \
+            llvm
+          pip3 install --break-system-packages meson mako
+
+      - name: Build ${{ matrix.artifact }}
+        env:
+          VARIANT: ${{ matrix.variant }}
+          BUILD_VERSION: ${{ github.run_number }}
+          MESA_COMMIT: ${{ needs.resolve.outputs.mesa_commit }}
+        run: |
+          chmod +x build_turnip.sh
+          ./build_turnip.sh
+
+      - name: Verify ZIP
+        run: |
+          echo "Generated files:"
+          find turnip_workdir -maxdepth 1 -type f -name "Turnip_*.zip" -print
+          test "$(find turnip_workdir -maxdepth 1 -type f -name 'Turnip_*.zip' | wc -l)" -eq 1
+          unzip -t turnip_workdir/Turnip_*.zip
+          unzip -p turnip_workdir/Turnip_*.zip meta.json | python3 -m json.tool
+
+      - name: Upload ${{ matrix.artifact }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: turnip_workdir/Turnip_*.zip
+          if-no-files-found: error
+          compression-level: 0
+
+  release:
+    needs: [resolve, build]
+    if: ${{ success() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all four drivers
+        uses: actions/download-artifact@v4
+        with:
+          pattern: Turnip-*
+          path: release
+          merge-multiple: true
+
+      - name: List release files
+        run: |
+          ls -lah release
+          test "$(find release -maxdepth 1 -type f -name '*.zip' | wc -l)" -eq 4
+
+      - name: Generate release metadata
+        run: |
+          echo "TAG_NAME=v$(date +'%Y.%m.%d')-${{ github.run_number }}" >> "$GITHUB_ENV"
+          echo "RELEASE_NAME=Turnip Android 4-pack - $(date +'%Y-%m-%d')" >> "$GITHUB_ENV"
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: ${{ env.RELEASE_NAME }}
+          body: |
+            Four Android/Bionic Turnip variants built from the same Mesa commit:
+            `${{ needs.resolve.outputs.mesa_commit }}`
+
+            - A7xx — StevenMXZ
+            - A7xx OneUI Glitch — StevenMXZ + 8g2 UI fix
+            - A8xx Patchs2 — Patchs2 A8xx recipe
+            - A8xx Patched Patchs1 — Patchs1 balanced Android recipe + 0001-0006
+          files: release/*.zip
+          fail_on_unmatched_files: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
