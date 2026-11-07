@@ -1,0 +1,12 @@
+--- a/src/freedreno/vulkan/tu_lrz.cc
++++ b/src/freedreno/vulkan/tu_lrz.cc
+@@ -929,6 +929,9 @@ tu_lrz_tiling_end(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
+    } else {
+       tu_emit_event_write<CHIP>(cmd, cs, FD_LRZ_FLUSH);
+    }
++
++   if (CHIP >= A8XX)
++      tu6_write_lrz_cntl<CHIP>(cmd, cs, {});
+ }
+ TU_GENX(tu_lrz_tiling_end);
+ 

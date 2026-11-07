@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Hugo223 <slimstalker@gmail.com>
+Date: Sat, 17 Oct 2026 14:46:26 +0500
+Subject: [PATCH] tu: only force per-sample interpolation for shaders that use it
+
+vkd3d-proton sets sampleShadingEnable for the whole pipeline as soon as
+any stage declares the SampleRateShading SPIR-V capability
+(libs/vkd3d/state.c).  That capability says nothing about real use:
+dxil-spirv adds it while translating declarations and opcodes such as
+sample interpolants, SV_SampleIndex or dx.op.sampleIndex, and the shader
+that ends up in the pipeline may consume none of that.
+
+Mesa's SPIR-V front end already computes the honest answer:
+spirv_to_nir sets uses_sample_shading only when the shader statically
+uses SampleId, SamplePosition or an input decorated with Sample, so
+declared but unused inputs do not count.
+
+Turnip then overrides that answer: tu_pipeline sets force_sample_interp
+from sampleShadingEnable, and tu_lower_nir sets uses_sample_shading and
+marks every non-centroid input as sample.  The fragment shader then runs
+at sample rate (x4 at 4 samples) with all inputs interpolated per
+sample and early-Z force-disabled (tu_cmd_buffer.cc), which costs 27% in
+Teardown (Winlator + vkd3d-proton) on A840: 40 FPS against 55 FPS for
+the proprietary driver doing the same drawing.
+
+Respect the static use result instead.  When the shader really consumes
+per-sample data, nothing changes: uses_sample_shading is already true and
+the old code path is taken.  When it does not, the pipeline-level
+request no longer escalates the shader to per-sample mode.  Non-Sample
+inputs need not be evaluated independently for each sample, and one
+invocation still shades all covered samples.
+
+Tested on Adreno 840 (SM8850) with Teardown (Winlator + vkd3d-proton):
+40 -> 55 FPS, matching the proprietary driver.
+
+Signed-off-by: Hugo223 <slimstalker@gmail.com>
+Generated-by: LLM
+---
+ src/freedreno/vulkan/tu_shader.cc | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/freedreno/vulkan/tu_shader.cc b/src/freedreno/vulkan/tu_shader.cc
+index 45e173236dc..0e7dd3ca789 100644
+--- a/src/freedreno/vulkan/tu_shader.cc
++++ b/src/freedreno/vulkan/tu_shader.cc
+@@ -3578,8 +3578,8 @@ tu_lower_nir(struct tu_device *dev,
+    if (!key->multiview_mask)
+       tu_nir_lower_view_to_zero(nir);
+ 
+-   if (nir->info.stage == MESA_SHADER_FRAGMENT && key->force_sample_interp) {
+-      nir->info.fs.uses_sample_shading = true;
++   if (nir->info.stage == MESA_SHADER_FRAGMENT && key->force_sample_interp &&
++       nir->info.fs.uses_sample_shading) {
+       nir_foreach_shader_in_variable(var, nir) {
+          if (!var->data.centroid)
+             var->data.sample = true;

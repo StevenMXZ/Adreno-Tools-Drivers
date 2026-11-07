@@ -75,7 +75,7 @@ index f73c1f99a8aa..b23a241f91f6 100644
     TU_DEBUG_NO_CONCURRENT_BINNING    = BITFIELD64_BIT(35),
     TU_DEBUG_FORCE_CONCURRENT_BINNING = BITFIELD64_BIT(36),
     TU_DEBUG_COMPUTE_ROUND_ROBIN      = BITFIELD64_BIT(37),
-+   TU_DEBUG_DECK_EMU                 = BITFIELD64_BIT(37),
++   TU_DEBUG_DECK_EMU                 = BITFIELD64_BIT(39),
  };
  
  struct tu_env {
@@ -205,14 +205,14 @@ Date: Wed, 15 Apr 2026 22:57:20 +0400
 Subject: [PATCH] freedreno/common: enable A825
 
 ---
- src/freedreno/common/freedreno_devices.py | 26 +++++++++++++++++++++++
- 1 file changed, 26 insertions(+)
+ src/freedreno/common/freedreno_devices.py | 25 +++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
 
 diff --git a/src/freedreno/common/freedreno_devices.py b/src/freedreno/common/freedreno_devices.py
 index a74814329fb..452695fc5db 100644
 --- a/src/freedreno/common/freedreno_devices.py
 +++ b/src/freedreno/common/freedreno_devices.py
-@@ -1417,6 +1417,32 @@
+@@ -1417,6 +1417,31 @@
          raw_magic_regs = a8xx_base_raw_magic_regs,
      ))
  
@@ -238,12 +238,11 @@ index a74814329fb..452695fc5db 100644
 +        cs_shared_mem_size = 32 * 1024,
 +        wave_granularity = 2,
 +        fibers_per_sp = 128 * 2 * 16,
-+        magic_regs = dict(),
 +        raw_magic_regs = a8xx_base_raw_magic_regs,
 +    ))
 +
  add_gpus([
-         GPUId(chip_id=0x44030a20, name="Adreno (TM) 829"), # KGSL
+         GPUId(chip_id=0xffff44030a20, name="Adreno (TM) 829"),
      ], A6xxGPUInfo(
 From 1ebd39a498786be2c3acfc7729c2c5bf0c21d7c8 Mon Sep 17 00:00:00 2001
 From: DVD <dmitrijnemov13@gmail.com>
@@ -604,7 +603,7 @@ index 2a581a26a509..1189ca6d5f48 100644
  struct ir3_compiler {
     struct fd_device *dev;
     const struct fd_dev_id *dev_id;
-@@ -389,6 +396,52 @@ void ir3_shader_bisect_dump_id(struct ir3_shader_variant *v);
+@@ -389,5 +396,51 @@ void ir3_shader_bisect_dump_id(struct ir3_shader_variant *v);
  bool ir3_shader_bisect_select(struct ir3_shader_variant *v);
  bool ir3_shader_bisect_disasm_select(struct ir3_shader_variant *v);
  
@@ -656,9 +655,6 @@ index 2a581a26a509..1189ca6d5f48 100644
 +
  ENDC;
  
--#endif /* IR3_COMPILER_H_ */
-+#endif /* IR3_COMPILER_H_ */
-\ No newline at end of file
 diff --git a/src/freedreno/vulkan/tu_pipeline.cc b/src/freedreno/vulkan/tu_pipeline.cc
 index dba43f9a9c96..46508f0c0c82 100644
 --- a/src/freedreno/vulkan/tu_pipeline.cc
@@ -796,14 +792,14 @@ Subject: [PATCH] tu/pipeline: enable custom resolve for A810, off MSAA, FDM
 
 As practice has shown, this gives an increase in dx12 games, but does not provide any increase in dx11 In games, artifacts don't appear. This applies to the A810-830, I think because they have the same blob. That is, there's no increase on the A840.
 ---
- src/freedreno/vulkan/tu_pipeline.cc | 16 ++++++----------
- 1 file changed, 6 insertions(+), 10 deletions(-)
+ src/freedreno/vulkan/tu_pipeline.cc | 18 ++++++++----------
+ 1 file changed, 8 insertions(+), 10 deletions(-)
 
 diff --git a/src/freedreno/vulkan/tu_pipeline.cc b/src/freedreno/vulkan/tu_pipeline.cc
 index 46508f0c0c82..219fff57c21c 100644
 --- a/src/freedreno/vulkan/tu_pipeline.cc
 +++ b/src/freedreno/vulkan/tu_pipeline.cc
-@@ -1743,13 +1743,12 @@ tu_pipeline_builder_compile_shaders(struct tu_pipeline_builder *builder,
+@@ -1743,13 +1743,14 @@ tu_pipeline_builder_compile_shaders(struct tu_pipeline_builder *builder,
     };
     VkPipelineCreationFeedback stage_feedbacks[MESA_SHADER_STAGES] = { 0 };
  
@@ -814,12 +810,14 @@ index 46508f0c0c82..219fff57c21c 100644
     const bool is_a829 = chip_id == 0x44030A20ull;
 -   const bool is_target_gpu = is_a810 || is_a825 || is_a829;
 -   /* === КОНЕЦ ДОБАВЛЕНИЯ === */
-+   const bool is_a830 = chip_id == 0xffff44050000 || 0x44050001;
++   const bool is_a830 = chip_id == 0xffff44050000ull ||
++                        chip_id == 0x44050000ull ||
++                        chip_id == 0x44050001ull;
 +   const bool is_target_gpu = is_a810 || is_a825 || is_a829 || is_a830;
  
     const bool executable_info =
        builder->create_flags &
-@@ -1857,9 +1856,8 @@ tu_pipeline_builder_compile_shaders(struct tu_pipeline_builder *builder,
+@@ -1857,9 +1858,8 @@ tu_pipeline_builder_compile_shaders(struct tu_pipeline_builder *builder,
  
     if (builder->state &
         VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT) {
@@ -830,7 +828,7 @@ index 46508f0c0c82..219fff57c21c 100644
  
        if (builder->device->physical_device->instance->drirc.misc.emulate_alpha_to_coverage) {
           keys[MESA_SHADER_FRAGMENT].emulate_alpha_to_coverage = true;
-@@ -1912,9 +1910,8 @@ tu_pipeline_builder_compile_shaders(struct tu_pipeline_builder *builder,
+@@ -1912,9 +1912,8 @@ tu_pipeline_builder_compile_shaders(struct tu_pipeline_builder *builder,
           }
        }
  
@@ -841,7 +839,7 @@ index 46508f0c0c82..219fff57c21c 100644
     }
  
     if (builder->state & VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT) {
-@@ -1955,9 +1952,8 @@ tu_pipeline_builder_compile_shaders(struct tu_pipeline_builder *builder,
+@@ -1955,9 +1954,8 @@ tu_pipeline_builder_compile_shaders(struct tu_pipeline_builder *builder,
         * just checked in tu6_emit_fs_inputs.  We will also copy the value to
         * tu_shader_key::force_sample_interp in a bit.
         */
@@ -852,7 +850,7 @@ index 46508f0c0c82..219fff57c21c 100644
     }
  
     unsigned char pipeline_blake3[BLAKE3_KEY_LEN];
-@@ -5282,4 +5278,4 @@ tu_GetPipelineExecutableInternalRepresentationsKHR(
+@@ -5282,4 +5280,4 @@ tu_GetPipelineExecutableInternalRepresentationsKHR(
     }
  
     return incomplete_text ? VK_INCOMPLETE : vk_outarray_status(&out);
@@ -1007,3 +1005,57 @@ index aa6b04693f3a..af2abd0bc8e9 100644
                                      &upload_remaining);
              }
           }
+From 0477f79d425745bdb627d0056604777b6a01241c Mon Sep 17 00:00:00 2001
+From: whitebelyash <whbexiumwork@gmail.com>
+Date: Tue, 6 Oct 2026 04:47:38 -0400
+Subject: [PATCH 1/2] WIP: freedreno/common: enable Adreno 812
+
+Cherry-picked from whitebelyash/mesa-unified@a37abf89 (turnip/gen8).
+---
+ src/freedreno/common/freedreno_devices.py | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/src/freedreno/common/freedreno_devices.py b/src/freedreno/common/freedreno_devices.py
+index 5a200f1..8a699d6 100644
+--- a/src/freedreno/common/freedreno_devices.py
++++ b/src/freedreno/common/freedreno_devices.py
+@@ -1482,6 +1482,9 @@ a8xx_gen2 = GPUProps(
+ 
+ add_gpus([
+        GPUId(chip_id=0xffff44010000, name="Adreno (TM) 810"),
++       GPUId(chip_id=0xffff44010200, name="Adreno (TM) 812"),
++       GPUId(chip_id=0x44010000, name="Adreno (TM) 810"), # KGSL
++       GPUId(chip_id=0x44010200, name="Adreno (TM) 812"), # KGSL
+     ], A6xxGPUInfo(
+         CHIP.A8XX,
+         [a7xx_base, a7xx_gen3, a8xx_base, a8xx_gen1, GPUProps(
+-- 
+2.47.3
+
+
+From f0f1f097652bdd4ef5a6c039b914426fcf888773 Mon Sep 17 00:00:00 2001
+From: whitebelyash <whbexiumwork@gmail.com>
+Date: Tue, 6 Oct 2026 04:47:38 -0400
+Subject: [PATCH 2/2] freedreno/common: change a810/a812 depth ccu fraction
+
+Cherry-picked from whitebelyash/mesa-unified@9c7e0226 (turnip/gen8).
+---
+ src/freedreno/common/freedreno_devices.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/freedreno/common/freedreno_devices.py b/src/freedreno/common/freedreno_devices.py
+index 8a699d6..12b35c5 100644
+--- a/src/freedreno/common/freedreno_devices.py
++++ b/src/freedreno/common/freedreno_devices.py
+@@ -1493,7 +1493,7 @@ add_gpus([
+             sysmem_vpc_bv_pos_buf_size = 32768,
+             sysmem_ccu_color_cache_fraction = CCUColorCacheFraction.FULL.value,
+             sysmem_per_ccu_color_cache_size = 64 * 1024,
+-            sysmem_ccu_depth_cache_fraction = CCUColorCacheFraction.THREE_QUARTER.value,
++            sysmem_ccu_depth_cache_fraction = CCUColorCacheFraction.FULL.value,
+             sysmem_per_ccu_depth_cache_size = 64 * 1024,
+             gmem_ccu_color_cache_fraction = CCUColorCacheFraction.EIGHTH.value,
+             gmem_per_ccu_color_cache_size = 32 * 1024,
+-- 
+2.47.3
+

@@ -9,16 +9,19 @@ stale bindless descriptors cached after descriptor sets changed. Use
 SP_GFX_BINDLESS_INVALIDATE and SP_CS_BINDLESS_INVALIDATE instead, and also
 invalidate when the hardware is initialized and before blits.
 ---
+Rebased onto Mesa 3923c345: the tu6_emit_flushes hunk is dropped because
+upstream c88b6ebd (MR 45129) now writes SP_*_BINDLESS_INVALIDATE there itself.
+
  src/freedreno/vulkan/tu_clear_blit.cc |  2 ++
- src/freedreno/vulkan/tu_cmd_buffer.cc | 15 +++++----------
+ src/freedreno/vulkan/tu_cmd_buffer.cc |  7 +++----
  src/freedreno/vulkan/tu_cmd_buffer.h  | 20 ++++++++++++++++++++
- 3 files changed, 27 insertions(+), 10 deletions(-)
+ 3 files changed, 25 insertions(+), 4 deletions(-)
 
 diff --git a/src/freedreno/vulkan/tu_clear_blit.cc b/src/freedreno/vulkan/tu_clear_blit.cc
-index a820f29b..d97d6503 100644
+index 714b103b..d100c307 100644
 --- a/src/freedreno/vulkan/tu_clear_blit.cc
 +++ b/src/freedreno/vulkan/tu_clear_blit.cc
-@@ -1079,6 +1079,8 @@ r3d_common(struct tu_cmd_buffer *cmd, struct tu_cs *cs, enum r3d_type type,
+@@ -1210,6 +1210,8 @@ r3d_common(struct tu_cmd_buffer *cmd, struct tu_cs *cs, enum r3d_type type,
           .gfx_shared_const = true,
           .cs_bindless = CHIP == A6XX ? 0x1f : 0xff,
           .gfx_bindless = CHIP == A6XX ? 0x1f : 0xff,));
@@ -28,25 +31,10 @@ index a820f29b..d97d6503 100644
     with_crb (cs, 2 * 5 + 2 * 12) {
        tu6_emit_xs_config<CHIP>(crb, { .vs = vs, .fs = fs });
 diff --git a/src/freedreno/vulkan/tu_cmd_buffer.cc b/src/freedreno/vulkan/tu_cmd_buffer.cc
-index 35b054e8..c2f268d9 100644
+index a1b75f01..ea1cecd8 100644
 --- a/src/freedreno/vulkan/tu_cmd_buffer.cc
 +++ b/src/freedreno/vulkan/tu_cmd_buffer.cc
-@@ -390,12 +390,8 @@ tu6_emit_flushes(struct tu_cmd_buffer *cmd_buffer,
-       tu_emit_event_write<CHIP>(cmd_buffer, cs, FD_CACHE_CLEAN);
-    if (flushes & TU_CMD_FLAG_CACHE_INVALIDATE)
-       tu_emit_event_write<CHIP>(cmd_buffer, cs, FD_CACHE_INVALIDATE);
--   if (flushes & TU_CMD_FLAG_BINDLESS_DESCRIPTOR_INVALIDATE) {
--      tu_cs_emit_regs(cs, SP_UPDATE_CNTL(CHIP,
--            .cs_bindless = CHIP == A6XX ? 0x1f : 0xff,
--            .gfx_bindless = CHIP == A6XX ? 0x1f : 0xff,
--      ));
--   }
-+   if (flushes & TU_CMD_FLAG_BINDLESS_DESCRIPTOR_INVALIDATE)
-+      tu_emit_bindless_invalidate<CHIP>(cs, true, true);
- 
-    /* SUBPASS_SLICE_FENCE is a weaker version of:
-     * - CACHE_INVALIDATE (only invalidate UCHE GMEM aperture)
-@@ -2506,6 +2502,8 @@ tu_init_hw(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
+@@ -2507,6 +2507,8 @@ tu_init_hw(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
           .gfx_shared_const = true,
           .cs_bindless = CHIP == A6XX ? 0x1f : 0xff,
           .gfx_bindless = CHIP == A6XX ? 0x1f : 0xff,));
@@ -55,7 +43,7 @@ index 35b054e8..c2f268d9 100644
  
     tu_cs_emit_wfi(cs);
  
-@@ -4818,10 +4816,7 @@ tu6_emit_bindless_bases(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
+@@ -4819,10 +4821,7 @@ tu6_emit_bindless_bases(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
        }
     }
  
@@ -68,10 +56,10 @@ index 35b054e8..c2f268d9 100644
  
  template <chip CHIP>
 diff --git a/src/freedreno/vulkan/tu_cmd_buffer.h b/src/freedreno/vulkan/tu_cmd_buffer.h
-index 4b87b019..fb86521a 100644
+index 2c4691e3..49d71b37 100644
 --- a/src/freedreno/vulkan/tu_cmd_buffer.h
 +++ b/src/freedreno/vulkan/tu_cmd_buffer.h
-@@ -926,6 +926,26 @@ void tu6_emit_blit_scissor(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
+@@ -935,6 +935,26 @@ void tu6_emit_blit_scissor(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
  
  void tu_disable_draw_states(struct tu_cmd_buffer *cmd, struct tu_cs *cs);
  

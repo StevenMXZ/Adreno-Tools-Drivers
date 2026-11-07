@@ -1,0 +1,54 @@
+From 5327a2a779a30253a18158deef0ec5bfe1d65a02 Mon Sep 17 00:00:00 2001
+From: airidosas252 <airidaslideikis@gmail.com>
+Date: Thu, 22 Oct 2026 20:32:57 +0300
+Subject: [PATCH 9/9] freedreno/fdl: Use NUM_ELEMENTS for A8XX buffer
+ descriptors
+
+The A8XX buffer descriptor wrote the element count as
+WIDTH(elements & 0x7fff) | HEIGHT(elements >> 15), so counts of 2^30 or
+more wrapped. The descriptor format has a 32-bit NUM_ELEMENTS field for
+DESC_BUFFER, and the hardware honours it.
+
+Turnip's 8-bit SSBO descriptor has one element per byte, so loads beyond
+1 GiB returned 0. A 2 GiB SSBO, as vkd3d-proton creates for the Unreal
+Engine 5.5+ Nanite reserved streaming pool, became 0 elements in the
+16-bit descriptor, which also serves 32-bit access through isam.v. Every
+pool read returned 0 and every upload was dropped.
+
+VK-CTS on Adreno 840 (KGSL), no regressions (same results before/after):
+  dEQP-VK.texture.texel_buffer.*                   21 / 0 / 2
+  dEQP-VK.api.buffer_view.*                       439 / 0 / 565
+  dEQP-VK.binding_model.descriptor_buffer*       2371 / 0 / 3057
+    (+4 ResourceError, also before)
+  dEQP-VK.ssbo.layout.*8bit*                      625 / 0 / 2
+  dEQP-VK.spirv_assembly.instruction.compute.8bit_storage*   7 / 0 / 22
+  dEQP-VK.spirv_assembly.instruction.compute.16bit_storage* 246 / 0 / 289
+  dEQP-VK.image.*buffer*                         2031 / 0 / 514
+  dEQP-VK.memory_model.message_passing.core11.u32.coherent.*  43 / 0 / 241
+The CTS does not use buffers of 1 GiB or more. A standalone test (2 GiB
+buffer, probes beyond 2^27..2^29 elements): 8-bit SSBO loads past 1 GiB
+8/24 wrong before, 0 after; a 2 GiB SSBO range 13/14 wrong before, 0 after.
+
+Fixes: f448ad3adf7 ("freedreno/layout: gen8 descriptor support")
+---
+ src/freedreno/fdl/fd6_view.cc | 4 +---
+ 1 file changed, 1 insertion(+), 3 deletions(-)
+
+diff --git a/src/freedreno/fdl/fd6_view.cc b/src/freedreno/fdl/fd6_view.cc
+index df6abfc9c54..03b0d4db635 100644
+--- a/src/freedreno/fdl/fd6_view.cc
++++ b/src/freedreno/fdl/fd6_view.cc
+@@ -683,9 +683,7 @@ fdl6_buffer_view_init(uint32_t *descriptor, enum pipe_format format,
+       descriptor[1] = A8XX_TEX_MEMOBJ_1_BASE_HI(iova >> 32) |
+                       A8XX_TEX_MEMOBJ_1_TYPE(A6XX_TEX_BUFFER) |
+                       A8XX_TEX_MEMOBJ_1_STRUCTSIZETEXELS(struct_size_texels);
+-      descriptor[2] = A8XX_TEX_MEMOBJ_2_WIDTH(elements & ((1 << 15) - 1)) |
+-                      A8XX_TEX_MEMOBJ_2_HEIGHT(elements >> 15) |
+-                      A8XX_TEX_MEMOBJ_2_SAMPLES(MSAA_ONE);
++      descriptor[2] = A8XX_TEX_MEMOBJ_2_NUM_ELEMENTS(elements);
+       descriptor[3] = A8XX_TEX_MEMOBJ_3_FMT(fd6_texture_format(buffer_format, TILE6_LINEAR, false)) |
+                       A8XX_TEX_MEMOBJ_3_SWAP(fd6_texture_swap(buffer_format, TILE6_LINEAR, false)) |
+                       fdl6_texswiz<CHIP>(&args, false);
+-- 
+2.53.0
+

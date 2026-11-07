@@ -11,6 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       mesa_commit: ${{ steps.mesa.outputs.commit }}
+      release_tag: ${{ steps.release.outputs.tag }}
+      release_name: ${{ steps.release.outputs.name }}
     steps:
       - name: Resolve Mesa main
         id: mesa
@@ -20,8 +22,49 @@ jobs:
           echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
           echo "Mesa commit: $COMMIT"
 
-  build:
+      - name: Set release metadata
+        id: release
+        run: |
+          DATE=$(date -u +'%Y.%m.%d')
+          HUMAN_DATE=$(date -u +'%Y-%m-%d')
+          echo "tag=v${DATE}-${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "name=Turnip Android 4-pack - ${HUMAN_DATE}" >> "$GITHUB_OUTPUT"
+
+  prepare_release:
     needs: resolve
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create or refresh draft Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+          RELEASE_NAME: ${{ needs.resolve.outputs.release_name }}
+          MESA_COMMIT: ${{ needs.resolve.outputs.mesa_commit }}
+        run: |
+          cat > release-notes.md <<EOF
+          Android/Bionic Turnip variants built from the same Mesa commit:
+          `${MESA_COMMIT}`
+
+          - A7xx
+          - A7xx OneUI Glitch
+          - A8xx Gen8
+          - A8xx Patched
+
+          Upstream KGSL sync and nonblocking timestamp polling verified.
+          A8xx: gralloc UBWC, IMapper5, memory budget, LRZ, SSBO and buffer descriptor fixes.
+          A8xx: subgroup correctness and game-specific SSBO compatibility.
+          All variants: static sample-shading interpolation gate.
+          EOF
+
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Draft release already exists; refreshing notes for retry."
+            gh release edit "$RELEASE_TAG" --draft --title "$RELEASE_NAME" --notes-file release-notes.md --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$RELEASE_TAG" --draft --title "$RELEASE_NAME" --notes-file release-notes.md --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY"
+          fi
+
+  build:
+    needs: [resolve, prepare_release]
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
@@ -32,10 +75,10 @@ jobs:
             artifact: Turnip-A7xx
           - variant: a7xx-oneui
             artifact: Turnip-A7xx-OneUI-Glitch
-          - variant: a8xx-patchs2
-            artifact: Turnip-A8xx-Patchs2
-          - variant: a8xx-patchs1
-            artifact: Turnip-A8xx-Patched-Patchs1
+          - variant: a8xx-gen8
+            artifact: Turnip-A8xx-Gen8
+          - variant: a8xx-patched
+            artifact: Turnip-A8xx-Patched
 
     steps:
       - name: Checkout Repository
@@ -79,52 +122,34 @@ jobs:
           unzip -t turnip_workdir/Turnip_*.zip
           unzip -p turnip_workdir/Turnip_*.zip meta.json | python3 -m json.tool
 
-      - name: Upload ${{ matrix.artifact }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: turnip_workdir/Turnip_*.zip
-          if-no-files-found: error
-          compression-level: 0
+      - name: Upload ${{ matrix.artifact }} directly to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+        run: |
+          ZIP="$(find turnip_workdir -maxdepth 1 -type f -name 'Turnip_*.zip' -print -quit)"
+          test -n "$ZIP"
+          test -f "$ZIP"
+          echo "Uploading $ZIP directly to release $RELEASE_TAG"
+          gh release upload "$RELEASE_TAG" "$ZIP" --clobber --repo "$GITHUB_REPOSITORY"
 
   release:
-    needs: [resolve, build]
+    needs: [resolve, prepare_release, build]
     if: ${{ success() }}
     runs-on: ubuntu-latest
     steps:
-      - name: Download all four drivers
-        uses: actions/download-artifact@v4
-        with:
-          pattern: Turnip-*
-          path: release
-          merge-multiple: true
-
-      - name: List release files
+      - name: Verify all four release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
         run: |
-          ls -lah release
-          test "$(find release -maxdepth 1 -type f -name '*.zip' | wc -l)" -eq 4
-
-      - name: Generate release metadata
-        run: |
-          echo "TAG_NAME=v$(date +'%Y.%m.%d')-${{ github.run_number }}" >> "$GITHUB_ENV"
-          echo "RELEASE_NAME=Turnip Android 4-pack - $(date +'%Y-%m-%d')" >> "$GITHUB_ENV"
+          ASSET_COUNT="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length')"
+          echo "Release assets: $ASSET_COUNT"
+          test "$ASSET_COUNT" -eq 4
 
       - name: Publish Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.TAG_NAME }}
-          name: ${{ env.RELEASE_NAME }}
-          body: |
-            Four Android/Bionic Turnip variants built from the same Mesa commit:
-            `${{ needs.resolve.outputs.mesa_commit }}`
-
-            - A7xx — StevenMXZ
-            - A7xx OneUI Glitch — StevenMXZ + 8g2 UI fix
-            - A8xx Patchs2 — Patchs2 A8xx recipe
-            - A8xx Patched Patchs1 — Patchs1 balanced Android recipe + 0001-0006
-          files: release/*.zip
-          fail_on_unmatched_files: true
-          draft: false
-          prerelease: false
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+        run: |
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease=false --repo "$GITHUB_REPOSITORY"

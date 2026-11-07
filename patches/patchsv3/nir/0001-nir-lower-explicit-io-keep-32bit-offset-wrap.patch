@@ -1,0 +1,65 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: K11MCH1 <81425424+K11MCH1@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 20:58:32 +0900
+Subject: [PATCH] nir/lower_explicit_io: Keep the 32-bit offset wrap with
+ offset_shift
+
+With offset_shift, explicit_io_offset_from_deref() shifts the array
+stride right before the multiply, so an array term becomes
+index * (stride >> shift). The byte offset this replaces,
+index * stride, is a 32-bit value that wraps. Pre-shifting keeps the
+bits that the wrap would drop, so for a large index
+(index * stride mod 2^32) >> shift and index * (stride >> shift)
+differ by a multiple of 2^(32 - shift). Only ir3 sets
+max_offset_shift, so this affects freedreno and Turnip.
+
+vkd3d-proton emits raw buffer indices that rely on the wrap. Unreal
+Engine 5 Nanite's cluster culling stores hardware-raster clusters from
+the end of a uvec2 list, and its SPIR-V computes the slot as
+0x1fffffff - k + MaxVisibleClusters, that is
+(MaxVisibleClusters - 1 - k) + 2^29. Turnip turned that into the dword
+offset 2 * (MaxVisibleClusters - 1 - k) + 2^30, 4 GiB past the
+binding, so robust buffer access dropped every store. The hardware
+rasterizer then read zero records and drew one cluster over and over,
+and those surfaces were missing (Lords of the Fallen 2023, UE 5.1).
+
+By SPIR-V rules that index is out of bounds, so dropping the store is
+allowed. Masking the shifted term with UINT32_MAX >> shift for 32-bit
+offsets gives back exactly the result of the wrapped byte offset, as
+before offset_shift.
+
+Tested on Adreno 840 (KGSL):
+  A compute shader storing to uvec2[] at 0x1fffffff - k + n
+  (n = 1024, robustBufferAccess on): 0/64 stores landed before,
+  64/64 at element n - 1 - k after.
+  A Lords of the Fallen frame capture replayed on the device:
+  hardware-raster cluster records 0/1100 before, 1100/1100 after, and
+  the missing geometry is drawn.
+No VK-CTS run.
+
+Fixes: 30716cc5243 ("nir/lower_explicit_io: add support for offset_shift")
+Fixes: 7752cc26c45 ("ir3: use offset_shift for SSBO intrinsics")
+---
+ src/compiler/nir/nir_lower_explicit_io.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/src/compiler/nir/nir_lower_explicit_io.c b/src/compiler/nir/nir_lower_explicit_io.c
+index 9367150..f45ba13 100644
+--- a/src/compiler/nir/nir_lower_explicit_io.c
++++ b/src/compiler/nir/nir_lower_explicit_io.c
+@@ -1246,6 +1246,12 @@ explicit_io_offset_from_deref(nir_builder *b, nir_deref_instr *deref,
+          offset = nir_amul_imm(b, index, stride);
+       }
+ 
++      /* Keep ((index * stride) mod 2^32) >> shift: vkd3d-proton raw buffer
++       * indices rely on the 32-bit byte offset wrapping.
++       */
++      if (shift && offset_bit_size == 32)
++         offset = nir_iand_imm(b, offset, UINT32_MAX >> shift);
++
+       return offset;
+    }
+ 
+-- 
+2.43.0
+

@@ -20,7 +20,7 @@ WHERE THE VALUE ACTUALLY COMES FROM
     reached here. An earlier version of this patch targeted it and had no
     observable effect, which is exactly why.
 
-    Mesa's shared AHB usage calculation carries no vendor bits at all. WinNative
+    Mesa's shared AHB usage calculation carries no vendor bits at all. Turnip
     asks for COLOR_ATTACHMENT -> GPU_FRAMEBUFFER (0x200); SurfaceFlinger's
     consumer side contributes HW_COMPOSER|HW_TEXTURE (0x900); total 0xb00 -
     exactly what the device captures show. The blob returns the same plus
@@ -70,7 +70,7 @@ SCOPING - do NOT move this into vk_image_info_to_ahb_usage()
           rejects every buffer that does not have it.
 
     A build that added the bit inside that function produced 448
-    "nativeImportAhbToVulkan failed" errors and a black screen: WinNative's
+    "nativeImportAhbToVulkan failed" errors and a black screen: Turnip's
     X-server images are allocated in gpu_image.c with
     CPU_READ_OFTEN|CPU_WRITE_OFTEN (logged as usage=0x332) and are therefore
     linear by necessity. A CPU-bit guard inside the function cannot catch this -
