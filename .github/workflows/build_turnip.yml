@@ -51,9 +51,8 @@ jobs:
           - A8xx Patched
 
           Upstream KGSL sync and nonblocking timestamp polling verified.
-          A8xx: gralloc UBWC, IMapper5, memory budget, LRZ, SSBO and buffer descriptor fixes.
-          A8xx: subgroup correctness and game-specific SSBO compatibility.
-          All variants: static sample-shading interpolation gate.
+          A8xx: gralloc UBWC, IMapper5, memory budget and GPU compatibility fixes.
+          A8xx: executable-specific SSBO compatibility.
           EOF
 
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then

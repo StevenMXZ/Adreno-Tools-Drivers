@@ -18,10 +18,7 @@ AdrenoTools-compatible ZIP packaging.
 ## Features
 
 - Upstream KGSL timestamp polling and sync fixes are verified before building.
-- Sample shading interpolation is restricted to shaders that require it.
 - A8xx includes Qualcomm gralloc UBWC, IMapper5, heap accounting and GPU ID fixes.
-- A8xx includes LRZ, SSBO offset and buffer descriptor corrections.
-- A8xx uses `supports_double_threadsize = False` for subgroup correctness.
 - The patched A8xx variant includes additional shader and compute fixes.
 
 ## Build

@@ -147,15 +147,6 @@ apply_Compatibility_Patched_registers_only() {
         || die "A8xx A8xx: LRZ color mask missing"
 }
 
-# The Gen8 gen8 stack enables double-threadsize, which regressed compute
-# subgroup correctness on A830; Patched keeps the Mesa default. Verify both.
-apply_a8xx_subgroup_fix() {
-    log "A8xx: retaining Mesa subgroup correctness (double_threadsize=false)..."
-    python3 "$REPO_ROOT/patches/a8xx/a8xx_no_double_threadsize.py"
-}
-
-# Gen8's executable-specific SSBO overrides. Add to both requested A8xx builds.
-# These are per-game rules, not a global change to Turnip.
 apply_a8xx_game_profiles() {
     log "A8xx: installing game-specific SSBO emulation profiles..."
     python3 "$REPO_ROOT/patches/a8xx/game_ssbo_profiles.py"
@@ -172,39 +163,6 @@ apply_Compatibility_a8xx() {
     python3 "$dd/scripts/a8xx_gpu_ids.py"
     python3 "$dd/scripts/apply_a8xx_cat4_rpt.py"
     python3 "$dd/scripts/process_heap_usage.py"
-
-    # These source changes are shared by all Mesa legs; only the two A8xx
-    # variants opt in. Reject a drifted patch instead of silently shipping it.
-    local patch_file target marker
-    for patch_file in \
-        "$dd/lrz/0001-tu-a8xx-lrz-reset-cntl-after-flush.patch" \
-        "$dd/nir/0001-nir-lower-explicit-io-keep-32bit-offset-wrap.patch" \
-        "$dd/fdl/0001-fdl-a8xx-buffer-num-elements.patch"; do
-        case "$patch_file" in
-            */lrz/*)
-                target="src/freedreno/vulkan/tu_lrz.cc"
-                marker='tu6_write_lrz_cntl<CHIP>(cmd, cs, {});'
-                ;;
-            */nir/*)
-                target="src/compiler/nir/nir_lower_explicit_io.c"
-                marker='offset = nir_iand_imm(b, offset, UINT32_MAX >> shift);'
-                ;;
-            */fdl/*)
-                target="src/freedreno/fdl/fd6_view.cc"
-                marker='A8XX_TEX_MEMOBJ_2_NUM_ELEMENTS(elements)'
-                ;;
-        esac
-
-        if git apply --check "$patch_file"; then
-            log "Compatibility: applying $(basename "$patch_file")"
-            git apply "$patch_file"
-        elif grep -Fq "$marker" "$target"; then
-            log "Compatibility: $(basename "$patch_file") already present in Mesa"
-        else
-            git apply --check --verbose "$patch_file" || true
-            die "Compatibility: patch did not apply and upstream fix is absent: $patch_file"
-        fi
-    done
 
     # Existing Patched IMapper/UBWC changes also run for Gen8.
     grep -Fq 'u_gralloc_aimapper.c' src/util/u_gralloc/meson.build \
@@ -237,22 +195,6 @@ verify_mesa_mr_44838() {
     grep -Fq 'return kgsl_poll_timestamp(device, context_id, timestamp);' "$kgsl" \
         || die "Mesa is missing MR !44838 zero-timeout nonblocking poll fix (e984ef29)"
     log "Mesa MR !44838: both upstream KGSL fixes verified"
-}
-
-apply_common_turnip_patches() {
-    log "Common: applying sample-shading interpolation gate..."
-    local sample_patch="$REPO_ROOT/patches/common/tu-sample-shading-gate.patch"
-    if ! git apply --check "$sample_patch"; then
-        git apply --check --verbose "$sample_patch" || true
-        die "Common patch tu-sample-shading-gate.patch did not apply cleanly"
-    fi
-    git apply "$sample_patch"
-
-    local shader_file="src/freedreno/vulkan/tu_shader.cc"
-    grep -Fq 'if (nir->info.stage == MESA_SHADER_FRAGMENT && key->force_sample_interp &&' "$shader_file" \
-        || die "Common sample-shading patch did not update the pipeline gate"
-    grep -Fq '       nir->info.fs.uses_sample_shading) {' "$shader_file" \
-        || die "Common sample-shading patch did not preserve static sample-shading usage"
 }
 
 apply_android_ndk_fixes() {
@@ -421,10 +363,6 @@ main() {
 
     verify_mesa_mr_44838
     configure_variant
-    if [ "$VARIANT" = "a8xx-gen8" ] || [ "$VARIANT" = "a8xx-patched" ]; then
-        apply_a8xx_subgroup_fix
-    fi
-    apply_common_turnip_patches
     if [ "$VARIANT" = "a8xx-gen8" ] || [ "$VARIANT" = "a8xx-patched" ]; then
         apply_Compatibility_a8xx
         apply_a8xx_game_profiles
