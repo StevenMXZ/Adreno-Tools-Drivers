@@ -156,7 +156,7 @@ apply_a8xx_game_profiles() {
 # Preserve the existing variant-specific GPU recipes and Patched patches.
 apply_Compatibility_a8xx() {
     log "A8xx: applying Compatibility compatibility fixes (without KGSL PWR_MAX)..."
-    local dd="$REPO_ROOT/patches/Compatibility"
+    local dd="$REPO_ROOT/patches/patchsv3"
 
     # The two A8xx recipes already supply A825 and most A810/A829 settings;
     # add only missing KGSL aliases, plus A845/A850, not a duplicate GPU stack.
