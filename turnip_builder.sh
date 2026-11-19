@@ -214,9 +214,6 @@ echo "--- Preparing Autotuner ---"
 cd "$workdir/mesa"
 git checkout .
 git clean -fd
-echo "Fetching Autotuner MR..."
-git fetch origin refs/merge-requests/37802/head
-git merge --no-edit FETCH_HEAD
 build_variant "Autotuner" "autotuner"
 
 echo -e "${green}All builds finished!${nocolor}"
