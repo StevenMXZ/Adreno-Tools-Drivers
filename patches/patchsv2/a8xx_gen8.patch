@@ -79,43 +79,6 @@ index f73c1f99a8aa..b23a241f91f6 100644
  };
  
  struct tu_env {
-From cdd24cd2e4765bd6f7e466cb2a9bd29a00b5bd53 Mon Sep 17 00:00:00 2001
-From: whitebelyash <whbexiumwork@gmail.com>
-Date: Fri, 16 Jan 2026 22:41:23 +0400
-Subject: [PATCH] HACK: u_gralloc: always use ubwc detection path
-
-u_gralloc checks if the current buffer was allocated by the Qualcomm vendor gralloc by comparing 'gmsm' magic with the buffer data. Since newer gralloc versions this way isn't working anymore, causing the condition to never success - essentially skipping setting proper DRM format modifier. This caused huge distorted picture on the screen because the allocated buffer never got a proper modifier as it should have
-
-Signed-off-by: whitebelyash <whbexiumwork@gmail.com>
----
- src/util/u_gralloc/u_gralloc_fallback.c | 12 ++++++++----
- 1 file changed, 8 insertions(+), 4 deletions(-)
-
-diff --git a/src/util/u_gralloc/u_gralloc_fallback.c b/src/util/u_gralloc/u_gralloc_fallback.c
-index 44fb32d8cfd5..bb6459c2e29c 100644
---- a/src/util/u_gralloc/u_gralloc_fallback.c
-+++ b/src/util/u_gralloc/u_gralloc_fallback.c
-@@ -148,12 +148,16 @@ fallback_gralloc_get_buffer_info(struct u_gralloc *gralloc,
-    out->strides[0] = stride;
- 
- #ifdef HAS_FREEDRENO
--   uint32_t gmsm = ('g' << 24) | ('m' << 16) | ('s' << 8) | 'm';
-+  /* uint32_t gmsm = ('g' << 24) | ('m' << 16) | ('s' << 8) | 'm';
-    if (hnd->handle->numInts >= 2 && hnd->handle->data[hnd->handle->numFds] == gmsm) {
--      /* This UBWC flag was introduced in a5xx. */
--      bool ubwc = hnd->handle->data[hnd->handle->numFds + 1] & 0x08000000;
--      out->modifier = ubwc ? DRM_FORMAT_MOD_QCOM_COMPRESSED : DRM_FORMAT_MOD_LINEAR;
-+
-    }
-+   */
-+   
-+   /* TODO: Actually find a way to detect a Qualcomm vendor allocated buffer */
-+   /* This UBWC flag was introduced in a5xx. */
-+   bool ubwc = hnd->handle->data[hnd->handle->numFds + 1] & 0x08000000;
-+   out->modifier = ubwc ? DRM_FORMAT_MOD_QCOM_COMPRESSED : DRM_FORMAT_MOD_LINEAR;
- #endif
- 
-    return 0;
 From b2314829411d26a28f2be116418f1f163d29f842 Mon Sep 17 00:00:00 2001
 From: whitebelyash <whbexiumwork@gmail.com>
 Date: Fri, 16 Jan 2026 22:55:20 +0400
