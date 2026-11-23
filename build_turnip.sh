@@ -7,31 +7,27 @@ nocolor='\033[0m'
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKDIR="$REPO_ROOT/turnip_workdir"
+INSTALL_DIR="$WORKDIR/install"
 NDKVER="android-ndk-r29"
 NDK="$WORKDIR/$NDKVER/toolchains/llvm/prebuilt/linux-x86_64/bin"
-BUILD_VERSION="${BUILD_VERSION:-1.0}"
-VARIANT="${VARIANT:-a7xx}"
+MIN_API=28
 MESA_COMMIT="${MESA_COMMIT:-}"
-
-# tu/a6xx: Work around D32S8 EARLY_Z_LATE_Z hang
-REVERT_COMMIT="a70d2af590db192f87b3af01f83a68b450edb4c3"
 
 log() { echo -e "${green}$*${nocolor}"; }
 die() { echo -e "${red}$*${nocolor}" >&2; exit 1; }
 
 check_deps() {
-    local deps="git meson ninja patchelf unzip curl pip flex bison zip glslangValidator python3 patch"
+    local deps="git meson ninja unzip curl flex bison zip glslangValidator python3"
     for dep in $deps; do
         command -v "$dep" >/dev/null 2>&1 || die "Falta a dependência: $dep"
     done
-    pip install mako --break-system-packages >/dev/null 2>&1 || true
 }
 
 prepare_workdir() {
     mkdir -p "$WORKDIR"
     if [ ! -d "$WORKDIR/$NDKVER" ]; then
         log "Baixando Android NDK r29..."
-        curl -sL "https://dl.google.com/android/repository/${NDKVER}-linux.zip" -o "$WORKDIR/${NDKVER}-linux.zip"
+        curl -fsSL "https://dl.google.com/android/repository/${NDKVER}-linux.zip" -o "$WORKDIR/${NDKVER}-linux.zip"
         unzip -q "$WORKDIR/${NDKVER}-linux.zip" -d "$WORKDIR"
     fi
 
@@ -50,151 +46,44 @@ prepare_workdir() {
     git -C "$WORKDIR/mesa" checkout -q --detach FETCH_HEAD
 }
 
-revert_d32s8_commit() {
-    log "A7xx: revertendo workaround D32S8 EARLY_Z_LATE_Z..."
-    if ! git cat-file -e "${REVERT_COMMIT}^{commit}" 2>/dev/null; then
-        git fetch -q --depth=2 origin "$REVERT_COMMIT"
-    fi
-    git revert --no-commit "$REVERT_COMMIT" || {
-        git revert --abort 2>/dev/null || true
-        git reset --hard HEAD
-        die "Falha ao reverter $REVERT_COMMIT"
-    }
+apply_patch() {
+    local patch_file="$REPO_ROOT/patches/$1"
+    log "Aplicando $1..."
+    git apply --check "$patch_file"
+    git apply "$patch_file"
 }
 
-apply_a7xx_base() {
-    revert_d32s8_commit
+apply_unified_patches() {
+    local script patch_file
 
-    log "A7xx: aplicando has_early_preamble=False..."
-    if ! grep -A20 'a7xx_gen1 = GPUProps(' src/freedreno/common/freedreno_devices.py | grep -q 'has_early_preamble = False'; then
-        sed -i '/a7xx_gen1 = GPUProps(/a \\        has_early_preamble = False,' src/freedreno/common/freedreno_devices.py
-    fi
+    apply_patch a8xx/0001-device-compatibility.patch
+    for script in a8xx/apply_a8xx_gpus.py a8xx/a8xx_gpu_ids.py \
+                  a7xx/apply_a7xx_gen1_quirks.py \
+                  android/fix_gralloc_flushall.py android/add_aimapper_gralloc.py \
+                  android/add_ubwc_swapchain_usage.py; do
+        python3 -B "$REPO_ROOT/patches/$script"
+    done
+
+    for patch_file in "$REPO_ROOT"/patches/a8xx/mesh-and-compute/*.patch; do
+        apply_patch "a8xx/mesh-and-compute/$(basename "$patch_file")"
+    done
+    apply_patch a8xx/0002-scope-pipeline-and-mesh-to-a8xx.patch
+    apply_patch a7xx/0001-oneui-ubwc-hint.patch
+    apply_patch a6xx/0001-revert-d32s8-late-z-workaround.patch
+    apply_patch a6xx/0002-kgsl-context-recovery.patch
+    apply_patch common/tu-vauzi-mutable-ubwc.patch
+
+    for script in a8xx/apply_a8xx_cat4_rpt.py a8xx/a8xx_resolve_cr_cntl.py \
+                  a8xx/a8xx_lrz_color_mask.py a8xx/process_heap_usage.py; do
+        python3 -B "$REPO_ROOT/patches/$script"
+    done
+
+    grep -Fq 'U_GRALLOC_TYPE_AIMAPPER' src/util/u_gralloc/u_gralloc.h
+    grep -Fq 'name="Adreno (TM) 825"' src/freedreno/common/freedreno_devices.py
+    grep -Fq '0x44041430' src/freedreno/common/freedreno_devices.py
+    grep -Fq '0x44051431' src/freedreno/common/freedreno_devices.py
+    grep -Fq 'tu_process_heap_used' src/freedreno/vulkan/tu_device.cc
     python3 -m py_compile src/freedreno/common/freedreno_devices.py
-}
-
-apply_oneui_glitch() {
-    log "A7xx OneUI: aplicando 8g2_ui_glitch.patch..."
-    patch -p1 --forward < "$REPO_ROOT/8g2_ui_glitch.patch"
-}
-
-apply_Gen8_a8xx() {
-    log "A8xx Gen8: aplicando whitebelyash turnip/gen8 stack..."
-    patch -p1 -N --fuzz=4 --no-backup-if-mismatch < "$REPO_ROOT/patches/patchsv2/a8xx_gen8.patch"
-
-    log "A8xx Gen8: shared memory 32 KiB -> 64 KiB..."
-    python3 "$REPO_ROOT/patches/patchsv2/a8xx_shared_mem.py"
-
-    # Compatibility Android gralloc/UBWC support is already ported in our
-    # Patched Android recipe. Reuse the same implementation for Gen8.
-    log "A8xx Gen8: enabling modern Qualcomm gralloc and UBWC..."
-    python3 "$REPO_ROOT/patches/patchsv1/android/fix_gralloc_flushall.py"
-    python3 "$REPO_ROOT/patches/patchsv1/android/add_aimapper_gralloc.py"
-    python3 "$REPO_ROOT/patches/patchsv1/android/add_ubwc_swapchain_usage.py"
-}
-
-apply_Patched_android_scripts() {
-    log "A8xx Patched: aplicando recipe Android/Bionic production..."
-    local scripts=(
-        fix_gralloc_flushall.py
-        fix_a8xx_dev_info.py
-        apply_a8xx_gpus.py
-        apply_a7xx_gen1_quirks.py
-        apply_a7xx_gen2_ubwc_hint.py
-        add_aimapper_gralloc.py
-        add_ubwc_swapchain_usage.py
-    )
-    local script
-    for script in "${scripts[@]}"; do
-        log "Patched: $script"
-        python3 "$REPO_ROOT/patches/patchsv1/android/$script"
-    done
-
-    log "Patched: usando variante balanced..."
-    python3 "$REPO_ROOT/patches/patchsv1/android/apply_balance_variant.py"
-}
-
-apply_Patched_extra_patches() {
-    log "A8xx Patched: aplicando patchset extra 0001-0005..."
-    local patch_file
-    local count=0
-    for patch_file in "$REPO_ROOT"/patches/patchsv1/000*.patch; do
-        [ -f "$patch_file" ] || continue
-        log "Verificando $(basename "$patch_file")..."
-        if ! git apply --check "$patch_file"; then
-            git apply --check --verbose "$patch_file" || true
-            die "Patch Patched não aplica limpo: $(basename "$patch_file")"
-        fi
-        git apply "$patch_file"
-        count=$((count + 1))
-    done
-    [ "$count" -eq 5 ] || die "Esperados 5 patches Patched, encontrados $count"
-}
-
-# Compatibility-derived A8xx register adjustments. Existing Patched scope.
-# These are not the A8xx-17 Turnip-Z mutable/BGRA patches.
-apply_Compatibility_Patched_registers_only() {
-    log "A8xx Patched: applying Compatibility A8xx register adjustments..."
-    local dd="$REPO_ROOT/patches/patchsv3/scripts"
-
-    python3 "$dd/a8xx_resolve_cr_cntl.py"
-    # Disabled: on A830 the hysteresis registers reduced DriverLab card FPS by
-    # ~6% without a demonstrated correctness gain (Gen8 4ccd4e9).
-    python3 "$dd/a8xx_lrz_color_mask.py"
-
-    grep -Fq 'A6XXRegs.REG_A8XX_RB_RESOLVE_CR_CNTL' src/freedreno/common/freedreno_devices.py \
-        || die "A8xx A8xx: RB_RESOLVE_CR_CNTL preamble missing"
-    grep -Fq 'GRAS_LRZ_COLOR_COMP_MASK(CHIP, .dword = lrz_color_comp_mask)' src/freedreno/vulkan/tu_pipeline.cc \
-        || die "A8xx A8xx: LRZ color mask missing"
-}
-
-apply_a8xx_game_profiles() {
-    log "A8xx: installing game-specific SSBO emulation profiles..."
-    python3 "$REPO_ROOT/patches/a8xx/game_ssbo_profiles.py"
-}
-
-# Compatibility Android fixes, scoped to A8xx Gen8 and A8xx Patched only.
-# Preserve the existing variant-specific GPU recipes and Patched patches.
-apply_Compatibility_a8xx() {
-    log "A8xx: applying Compatibility compatibility fixes (without KGSL PWR_MAX)..."
-    local dd="$REPO_ROOT/patches/patchsv3"
-
-    # The two A8xx recipes already supply A825 and most A810/A829 settings;
-    # add only missing KGSL aliases, plus A845/A850, not a duplicate GPU stack.
-    python3 "$dd/scripts/a8xx_gpu_ids.py"
-    python3 "$dd/scripts/apply_a8xx_cat4_rpt.py"
-    python3 "$dd/scripts/process_heap_usage.py"
-
-    # Existing Patched IMapper/UBWC changes also run for Gen8.
-    grep -Fq 'u_gralloc_aimapper.c' src/util/u_gralloc/meson.build \
-        || die "A8xx: IMapper5 backend not built"
-    grep -Fq 'U_GRALLOC_TYPE_AIMAPPER' src/util/u_gralloc/u_gralloc.h \
-        || die "A8xx: IMapper5 backend enum missing"
-    grep -Fq 'ahb_vendor_usage_compressed = 0x10000000ull' src/freedreno/vulkan/tu_device.cc \
-        || die "A8xx: vendor UBWC allocation usage missing"
-    grep -Fq 'UBWC flag detection - bypass legacy gmsm magic check for A8XX/A840.' src/util/u_gralloc/u_gralloc_fallback.c \
-        || die "A8xx: bounds-checked Qualcomm gralloc UBWC detection missing"
-    grep -Fq 'tu_process_heap_used' src/freedreno/vulkan/tu_device.cc \
-        || die "A8xx: process-wide memory budget fix missing"
-    grep -Fq '0x44041430' src/freedreno/common/freedreno_devices.py \
-        || die "A8xx: A845 ID missing"
-    grep -Fq '0x44051431' src/freedreno/common/freedreno_devices.py \
-        || die "A8xx: A850 ID missing"
-}
-
-# MR !44838 (Mesa main, 2026-10-08):
-# 1da50a1b: correctly merge KGSL timestamp syncobjs and sync-file fds.
-# e984ef29: poll retired GPU timestamps for zero-timeout checks without blocking.
-# These fixes are upstream. Never apply the obsolete local zero-timeout patch.
-verify_mesa_mr_44838() {
-    local kgsl="src/freedreno/vulkan/tu_knl_kgsl.cc"
-    log "Common: verifying upstream Mesa MR !44838 KGSL fixes..."
-
-    [ -f "$kgsl" ] || die "Missing $kgsl"
-    grep -Fq 'kgsl_syncobj_merge(struct tu_device *device' "$kgsl" \
-        || die "Mesa is missing MR !44838 mixed timestamp/sync-file merge fix (1da50a1b)"
-    grep -Fq 'return kgsl_poll_timestamp(device, context_id, timestamp);' "$kgsl" \
-        || die "Mesa is missing MR !44838 zero-timeout nonblocking poll fix (e984ef29)"
-    log "Mesa MR !44838: both upstream KGSL fixes verified"
 }
 
 apply_android_ndk_fixes() {
@@ -204,38 +93,6 @@ apply_android_ndk_fixes() {
     sed -i -E 's/([a-z_]+)->handle->/((const native_handle_t *)\1->handle)->/g' src/vulkan/runtime/vk_android.c || true
     sed -i 's/anb->handle->/((const native_handle_t *)anb->handle)->/g' src/vulkan/runtime/vk_android.c || true
     sed -i "/-Werror=gnu-empty-initializer/d" meson.build || true
-}
-
-clean_a7xx_driver_names() {
-    find src/freedreno/vulkan -type f -name "*.c*" -exec sed -i         's/"Turnip Adreno (TM) %s[^"]*"/"Turnip Adreno (TM) %s%.0s"/g' {} + || true
-    find src/freedreno/vulkan -type f -name "*.c*" -exec sed -i         's/"turnip Mesa driver (whitebelyash branch)"/"Turnip"/g' {} + || true
-    find src/freedreno/vulkan -type f -name "*.c*" -exec sed -i         's/"turnip Mesa driver"/"Turnip"/g' {} + || true
-}
-
-configure_variant() {
-    case "$VARIANT" in
-        a7xx)
-            apply_a7xx_base
-            clean_a7xx_driver_names
-            ;;
-        a7xx-oneui)
-            apply_a7xx_base
-            apply_oneui_glitch
-            clean_a7xx_driver_names
-            ;;
-        a8xx-gen8)
-            revert_d32s8_commit
-            apply_Gen8_a8xx
-            ;;
-        a8xx-patched)
-            apply_Patched_android_scripts
-            apply_Patched_extra_patches
-            apply_Compatibility_Patched_registers_only
-            ;;
-        *)
-            die "VARIANT inválido: $VARIANT"
-            ;;
-    esac
 }
 
 build_android() {
@@ -292,65 +149,63 @@ endian = 'little'
 EOF
 
     local build_dir="build-android-aarch64"
-    local output_dir="/tmp/turnip-$VARIANT"
-    rm -rf "$build_dir" "$output_dir"
+    rm -rf "$build_dir" "$INSTALL_DIR"
 
-    meson setup "$build_dir"         --cross-file android-aarch64.txt         --native-file native.txt         --prefix "$output_dir"         -Dbuildtype=release         -Dstrip=true         -Dplatforms=android         -Dvideo-codecs=         -Dplatform-sdk-version=36         -Dandroid-stub=true         -Dgallium-drivers=         -Dvulkan-drivers=freedreno         -Dvulkan-beta=true         -Dfreedreno-kmds=kgsl         -Degl=disabled         -Dandroid-libbacktrace=disabled
+    meson setup "$build_dir" \
+        --cross-file android-aarch64.txt \
+        --native-file native.txt \
+        --prefix "$INSTALL_DIR" \
+        --libdir lib \
+        -Dbuildtype=release \
+        -Dstrip=true \
+        -Dplatforms=android \
+        -Dvideo-codecs= \
+        -Dplatform-sdk-version=36 \
+        -Dandroid-stub=true \
+        -Dgallium-drivers= \
+        -Dvulkan-drivers=freedreno \
+        -Dvulkan-beta=true \
+        -Dfreedreno-kmds=kgsl \
+        -Degl=disabled \
+        -Dandroid-libbacktrace=disabled
 
     ninja -C "$build_dir" install
 
-    [ -f "$output_dir/lib/libvulkan_freedreno.so" ] || die "libvulkan_freedreno.so não foi gerada"
+    [ -f "$INSTALL_DIR/lib/libvulkan_freedreno.so" ] || die "libvulkan_freedreno.so não foi gerada"
 }
 
-package_variant() {
-    local mesa_short
-    mesa_short="$(git rev-parse --short=12 HEAD)"
+package_driver() {
+    local mesa_sha header_version output_dir archive
+    mesa_sha="$(git rev-parse HEAD)"
+    header_version="$(awk '$2 == "VK_HEADER_VERSION" {print $3}' include/vulkan/vulkan_core.h)"
+    [[ "$header_version" =~ ^[0-9]+$ ]] || die "VK_HEADER_VERSION inválido"
+    output_dir="$INSTALL_DIR/lib"
+    archive="$WORKDIR/Turnip_v27.0.0-R3.zip"
 
-    local pretty_name desc suffix
-    case "$VARIANT" in
-        a7xx)
-            pretty_name="Turnip A7xx"
-            desc="StevenMXZ A7xx Android/Bionic — revert D32S8 + has_early_preamble=False"
-            suffix="A7xx"
-            ;;
-        a7xx-oneui)
-            pretty_name="Turnip A7xx OneUI Glitch"
-            desc="StevenMXZ A7xx Android/Bionic + OneUI 8g2 UI glitch fix"
-            suffix="A7xx-OneUI-Glitch"
-            ;;
-        a8xx-gen8)
-            pretty_name="Turnip A8xx Gen8"
-            desc="A8xx Gen8 Android/Bionic GPU configuration, 64 KiB shared memory and A840v2 support"
-            suffix="A8xx-Gen8"
-            ;;
-        a8xx-patched)
-            pretty_name="Turnip A8xx Patched"
-            desc="A8xx Android/Bionic balanced configuration with additional 0001-0005 patches"
-            suffix="A8xx-Patched"
-            ;;
-    esac
+    python3 - "$mesa_sha" "$header_version" "$MIN_API" "$output_dir/meta.json" <<'PYMETA'
+import json
+import sys
+from pathlib import Path
 
-    local output_dir="/tmp/turnip-$VARIANT"
-    cd "$output_dir/lib"
-
-    cat > meta.json <<EOF
-{
-  "schemaVersion": 1,
-  "name": "$pretty_name",
-  "description": "$desc — Mesa $mesa_short",
-  "author": "StevenMXZ",
-  "packageVersion": "$BUILD_VERSION",
-  "vendor": "Mesa",
-  "driverVersion": "Mesa-$mesa_short",
-  "minApi": 28,
-  "libraryName": "libvulkan_freedreno.so"
+commit, header_version, min_api, output = sys.argv[1:]
+meta = {
+    "schemaVersion": 1,
+    "name": "Turnip v27.0.0-R3",
+    "description": f"Mesa {commit}",
+    "author": "StevenMXZ",
+    "packageVersion": "R2",
+    "vendor": "Mesa",
+    "driverVersion": f"Vulkan 1.4.{header_version}",
+    "minApi": int(min_api),
+    "libraryName": "libvulkan_freedreno.so",
 }
-EOF
+Path(output).write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+PYMETA
 
-    local zip_name="Turnip_${suffix}_V${BUILD_VERSION}_${mesa_short}.zip"
-    rm -f "$WORKDIR/$zip_name"
-    zip -9 -q "$WORKDIR/$zip_name" libvulkan_freedreno.so meta.json
-    log "Gerado: $WORKDIR/$zip_name"
+    rm -f "$archive"
+    (cd "$output_dir" && zip -9 -q "$archive" libvulkan_freedreno.so meta.json)
+    unzip -tq "$archive"
+    log "Gerado: $archive"
 }
 
 main() {
@@ -359,17 +214,10 @@ main() {
     cd "$WORKDIR/mesa"
 
     log "Mesa: $(git rev-parse HEAD)"
-    log "Variante: $VARIANT"
-
-    verify_mesa_mr_44838
-    configure_variant
-    if [ "$VARIANT" = "a8xx-gen8" ] || [ "$VARIANT" = "a8xx-patched" ]; then
-        apply_Compatibility_a8xx
-        apply_a8xx_game_profiles
-    fi
+    apply_unified_patches
     apply_android_ndk_fixes
     build_android
-    package_variant
+    package_driver
 }
 
 main "$@"

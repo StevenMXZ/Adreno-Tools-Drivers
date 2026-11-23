@@ -1,0 +1,461 @@
+diff --git a/src/freedreno/vulkan/tu_knl_kgsl.cc b/src/freedreno/vulkan/tu_knl_kgsl.cc
+index 68a684b5..37aed07c 100644
+--- a/src/freedreno/vulkan/tu_knl_kgsl.cc
++++ b/src/freedreno/vulkan/tu_knl_kgsl.cc
+@@ -48,7 +48,7 @@ safe_ioctl(int fd, unsigned long request, void *arg)
+ }
+ 
+ static int
+-kgsl_submitqueue_new(struct tu_device *dev, struct tu_queue *queue)
++kgsl_context_create(struct tu_device *dev, uint32_t *context_id)
+ {
+    struct kgsl_drawctxt_create req = {
+       .flags = KGSL_CONTEXT_SAVE_GMEM |
+@@ -60,19 +60,106 @@ kgsl_submitqueue_new(struct tu_device *dev, struct tu_queue *queue)
+    if (ret)
+       return ret;
+ 
+-   queue->msm_queue_id = req.drawctxt_id;
++   *context_id = req.drawctxt_id;
++
++   return 0;
++}
++
++static int
++kgsl_submitqueue_new(struct tu_device *dev, struct tu_queue *queue)
++{
++   int ret = kgsl_context_create(dev, &queue->msm_queue_id);
++   if (ret)
++      return ret;
+ 
++   queue->kgsl_contexts[0] = {queue->msm_queue_id, 0};
++   queue->kgsl_context_index = 0;
+    return 0;
+ }
+ 
++static void
++kgsl_context_destroy(struct tu_device *dev, uint32_t context_id)
++{
++   struct kgsl_drawctxt_destroy req = { .drawctxt_id = context_id };
++   safe_ioctl(dev->physical_device->local_fd, IOCTL_KGSL_DRAWCTXT_DESTROY, &req);
++}
++
+ static void
+ kgsl_submitqueue_close(struct tu_device *dev, struct tu_queue *queue)
+ {
+-   struct kgsl_drawctxt_destroy req = {
+-      .drawctxt_id = queue->msm_queue_id,
+-   };
++   for (unsigned i = queue->kgsl_context_index + 1; i > 0; --i)
++      kgsl_context_destroy(dev, queue->kgsl_contexts[i - 1].id);
++}
+ 
+-   safe_ioctl(dev->physical_device->local_fd, IOCTL_KGSL_DRAWCTXT_DESTROY, &req);
++static bool
++kgsl_recovery_enabled(const struct tu_device *device)
++{
++   return fd_dev_gen(&device->physical_device->dev_id) == 6;
++}
++
++/* Context entries are published by the submit thread under submit_mutex.
++ * Readers keep their original context ID. An invalidation racing with a
++ * replacement can therefore only update the entry it actually observed.
++ */
++static uint32_t *
++kgsl_context_invalid_flag(struct tu_queue *queue, uint32_t context_id,
++                          unsigned *index)
++{
++   for (unsigned i = p_atomic_read(&queue->kgsl_context_index) + 1; i > 0; --i) {
++      if (queue->kgsl_contexts[i - 1].id == context_id) {
++         *index = i - 1;
++         return &queue->kgsl_contexts[i - 1].invalid;
++      }
++   }
++   return nullptr;
++}
++
++static bool
++kgsl_context_abandoned(struct tu_queue *queue, uint32_t context_id)
++{
++   if (!kgsl_recovery_enabled(queue->device))
++      return false;
++
++   unsigned index;
++   uint32_t *invalid = kgsl_context_invalid_flag(queue, context_id, &index);
++   return invalid && p_atomic_read(invalid);
++}
++
++static bool
++kgsl_record_context_fault(struct tu_queue *queue, uint32_t context_id,
++                          int error)
++{
++   if (!kgsl_recovery_enabled(queue->device) || (error != ENOENT && error != EDEADLK))
++      return false;
++
++   unsigned index;
++   uint32_t *invalid = kgsl_context_invalid_flag(queue, context_id, &index);
++   if (!invalid || index + 1 == ARRAY_SIZE(queue->kgsl_contexts))
++      return false;
++
++   p_atomic_set(invalid, 1u);
++   return true;
++}
++
++/* Called under submit_mutex. Retain invalid IDs until queue teardown so
++ * old timestamps cannot alias a freshly allocated kernel context.
++ */
++static bool
++kgsl_replace_context(struct tu_queue *queue)
++{
++   const unsigned next = queue->kgsl_context_index + 1;
++   if (next == ARRAY_SIZE(queue->kgsl_contexts))
++      return false;
++
++   uint32_t new_id;
++   if (kgsl_context_create(queue->device, &new_id))
++      return false;
++
++   queue->kgsl_contexts[next] = {new_id, 0};
++   p_atomic_set(&queue->kgsl_context_index, next);
++   p_atomic_set(&queue->fence, -1);
++   p_atomic_set(&queue->msm_queue_id, new_id);
++   return true;
+ }
+ 
+ static void kgsl_bo_finish(struct tu_device *dev, struct tu_bo *bo);
+@@ -727,6 +814,7 @@ struct kgsl_syncobj
+    enum kgsl_syncobj_state state;
+ 
+    struct tu_queue *queue;
++   uint32_t context_id;
+    uint32_t timestamp;
+ 
+    int fd;
+@@ -787,13 +875,13 @@ kgsl_syncobj_dup(struct tu_device *device, const struct kgsl_syncobj *s, struct
+ }
+ 
+ static int
+-timestamp_to_fd(struct tu_queue *queue, uint32_t timestamp)
++timestamp_to_fd(struct tu_queue *queue, uint32_t context_id, uint32_t timestamp)
+ {
+    int fd;
+    struct kgsl_timestamp_event event = {
+       .type = KGSL_TIMESTAMP_EVENT_FENCE,
+       .timestamp = timestamp,
+-      .context_id = queue->msm_queue_id,
++      .context_id = context_id,
+       .priv = &fd,
+       .len = sizeof(fd),
+    };
+@@ -809,7 +897,7 @@ static int
+ kgsl_syncobj_ts_to_fd(const struct kgsl_syncobj *syncobj)
+ {
+    assert(syncobj->state == KGSL_SYNCOBJ_STATE_TS);
+-   return timestamp_to_fd(syncobj->queue, syncobj->timestamp);
++   return timestamp_to_fd(syncobj->queue, syncobj->context_id, syncobj->timestamp);
+ }
+ 
+ /* return true if timestamp a is greater (more recent) then b
+@@ -870,36 +958,63 @@ kgsl_timestamp_error(
+                     operation, context_id, timestamp, error, strerror(error));
+ }
+ 
+-static VkResult
+-kgsl_poll_timestamp(struct tu_device *device, unsigned int context_id, unsigned int timestamp)
++static int
++kgsl_read_timestamp(struct tu_device *device, uint32_t context_id,
++                    uint32_t type, uint32_t *timestamp)
+ {
+    struct kgsl_cmdstream_readtimestamp_ctxtid read = {
+       .context_id = context_id,
+-      .type = KGSL_TIMESTAMP_RETIRED,
++      .type = type,
++      .timestamp = 0,
+    };
+ 
+-   if (safe_ioctl(device->fd, IOCTL_KGSL_CMDSTREAM_READTIMESTAMP_CTXTID, &read))
++   const int ret = safe_ioctl(device->fd, IOCTL_KGSL_CMDSTREAM_READTIMESTAMP_CTXTID, &read);
++   if (!ret)
++      *timestamp = read.timestamp;
++   return ret;
++}
++
++static VkResult
++kgsl_poll_timestamp(struct tu_queue *queue, uint32_t context_id, uint32_t timestamp)
++{
++   struct tu_device *device = queue->device;
++   uint32_t retired;
++   if (kgsl_read_timestamp(device, context_id, KGSL_TIMESTAMP_RETIRED, &retired)) {
++      const int error = errno;
++      if (kgsl_record_context_fault(queue, context_id, error))
++         return VK_SUCCESS;
++
+       return vk_errorf(device, VK_ERROR_UNKNOWN, "KGSL timestamp read failed: context %u, timestamp %u, errno %d (%s)",
+-                       context_id, timestamp, errno, strerror(errno));
++                       context_id, timestamp, error, strerror(error));
++   }
+ 
+-   return timestamp_cmp(read.timestamp, timestamp) ? VK_SUCCESS : VK_TIMEOUT;
++   return timestamp_cmp(retired, timestamp) ? VK_SUCCESS : VK_TIMEOUT;
+ }
+ 
+ /* safe_ioctl is not enough as restarted waits would not adjust the timeout
+  * which could lead to waiting substantially longer than requested
+  */
+ static VkResult
+-wait_timestamp_safe(struct tu_device *device, unsigned int context_id, unsigned int timestamp, uint64_t abs_timeout_ns)
++wait_timestamp_safe(struct tu_queue *queue, uint32_t context_id,
++                    uint32_t timestamp, uint64_t abs_timeout_ns)
+ {
++   struct tu_device *device = queue->device;
++   if (kgsl_context_abandoned(queue, context_id))
++      return VK_SUCCESS;
++
+    struct kgsl_device_waittimestamp_ctxtid wait = {
+       .context_id = context_id,
+       .timestamp = timestamp,
+    };
+ 
++   bool saw_fault_notification = false;
+    while (true) {
+       int timeout_ms = get_relative_ms(abs_timeout_ns);
+-      if (timeout_ms == 0)
+-         return kgsl_poll_timestamp(device, context_id, timestamp);
++      if (timeout_ms == 0) {
++         if (saw_fault_notification)
++            return VK_TIMEOUT;
++         return kgsl_poll_timestamp(queue, context_id, timestamp);
++      }
+ 
+       wait.timeout = timeout_ms;
+       int ret = ioctl(device->fd, IOCTL_KGSL_DEVICE_WAITTIMESTAMP_CTXTID, &wait);
+@@ -907,6 +1022,17 @@ wait_timestamp_safe(struct tu_device *device, unsigned int context_id, unsigned
+          return VK_SUCCESS;
+ 
+       const int error = errno;
++      if (kgsl_record_context_fault(queue, context_id, error))
++         return VK_SUCCESS;
++
++      /* KGSL reports a prior fault after completing the wait. Recheck
++       * through WAIT so an invalid context cannot pass on a retired stamp.
++       */
++      if (error == EPROTO && kgsl_recovery_enabled(queue->device) && !saw_fault_notification) {
++         saw_fault_notification = true;
++         continue;
++      }
++
+       if (error != EINTR && error != EAGAIN)
+          return kgsl_timestamp_error(device, context_id, timestamp, "wait", error);
+    }
+@@ -918,7 +1044,8 @@ kgsl_queue_wait_fence(struct tu_queue *queue, uint32_t fence,
+ {
+    uint64_t abs_timeout_ns = os_time_get_absolute_timeout(timeout_ns);
+ 
+-   return wait_timestamp_safe(queue->device, queue->msm_queue_id, fence, abs_timeout_ns);
++   return wait_timestamp_safe(queue, p_atomic_read(&queue->msm_queue_id),
++                              fence, abs_timeout_ns);
+ }
+ 
+ static VkResult
+@@ -968,7 +1095,7 @@ kgsl_syncobj_wait(struct tu_device *device,
+       return VK_TIMEOUT;
+ 
+    case KGSL_SYNCOBJ_STATE_TS: {
+-      return wait_timestamp_safe(device, s->queue->msm_queue_id, s->timestamp, abs_timeout_ns);
++      return wait_timestamp_safe(s->queue, s->context_id, s->timestamp, abs_timeout_ns);
+    }
+ 
+    case KGSL_SYNCOBJ_STATE_FD: {
+@@ -1004,6 +1131,7 @@ kgsl_syncobj_wait_any(struct tu_device* device, struct kgsl_syncobj **syncobjs,
+ 
+    uint32_t num_fds = 0;
+    struct tu_queue *queue = NULL;
++   uint32_t context_id = UINT32_MAX;
+    struct kgsl_syncobj *sync = NULL;
+ 
+    /* Simple case, we already have a signal one */
+@@ -1018,11 +1146,14 @@ kgsl_syncobj_wait_any(struct tu_device* device, struct kgsl_syncobj **syncobjs,
+     */
+    bool convert_ts_to_fd = false;
+    kgsl_syncobj_foreach_state(syncobjs, KGSL_SYNCOBJ_STATE_TS) {
+-      if (queue != NULL && sync->queue != queue) {
++      if (kgsl_context_abandoned(sync->queue, sync->context_id))
++         return VK_SUCCESS;
++
++      if (queue != NULL && sync->context_id != context_id)
+          convert_ts_to_fd = true;
+-         break;
+-      }
++
+       queue = sync->queue;
++      context_id = sync->context_id;
+    }
+ 
+    /* If we have no FD nor TS syncobjs then we can return immediately */
+@@ -1042,7 +1173,7 @@ kgsl_syncobj_wait_any(struct tu_device* device, struct kgsl_syncobj **syncobjs,
+    if (convert_ts_to_fd) {
+       kgsl_syncobj_foreach_state(syncobjs, KGSL_SYNCOBJ_STATE_TS) {
+          struct pollfd *poll_fd = static_cast<struct pollfd *>(u_vector_add(&poll_fds));
+-         poll_fd->fd = timestamp_to_fd(sync->queue, sync->timestamp);
++         poll_fd->fd = kgsl_syncobj_ts_to_fd(sync);
+          if (poll_fd->fd < 0) {
+             result = kgsl_sync_error(device, "timestamp fence creation", errno);
+             goto finish;
+@@ -1062,7 +1193,7 @@ kgsl_syncobj_wait_any(struct tu_device* device, struct kgsl_syncobj **syncobjs,
+ 
+       if (num_fds && queue) {
+          struct pollfd *poll_fd = static_cast<struct pollfd *>(u_vector_add(&poll_fds));
+-         poll_fd->fd = timestamp_to_fd(queue, lowest_timestamp);
++         poll_fd->fd = timestamp_to_fd(queue, context_id, lowest_timestamp);
+          if (poll_fd->fd < 0) {
+             result = kgsl_sync_error(device, "timestamp fence creation", errno);
+             goto finish;
+@@ -1084,4 +1215,4 @@ kgsl_syncobj_wait_any(struct tu_device* device, struct kgsl_syncobj **syncobjs,
+-      result = wait_timestamp_safe(device, queue->msm_queue_id, lowest_timestamp, MIN2(abs_timeout_ns, INT64_MAX));
++      result = wait_timestamp_safe(queue, context_id, lowest_timestamp, MIN2(abs_timeout_ns, INT64_MAX));
+    } else {
+       int ret, i;
+ 
+@@ -1144,6 +1275,11 @@ kgsl_syncobj_export(struct tu_device *device, struct kgsl_syncobj *s, int *pFd)
+    }
+ 
+    case KGSL_SYNCOBJ_STATE_TS: {
++      if (kgsl_context_abandoned(s->queue, s->context_id)) {
++         *pFd = -1;
++         return VK_SUCCESS;
++      }
++
+       int fd = kgsl_syncobj_ts_to_fd(s);
+       if (fd < 0)
+          return kgsl_sync_error(device, "timestamp fence export", errno);
+@@ -1185,7 +1321,9 @@ kgsl_syncobj_merge(struct tu_device *device,
+ 
+    for (uint32_t i = 0; i < count; ++i) {
+       const struct kgsl_syncobj *sync = syncobjs[i];
+-      if (sync->state == KGSL_SYNCOBJ_STATE_SIGNALED)
++      if (sync->state == KGSL_SYNCOBJ_STATE_SIGNALED ||
++          (sync->state == KGSL_SYNCOBJ_STATE_TS &&
++           kgsl_context_abandoned(sync->queue, sync->context_id)))
+          continue;
+       if (sync->state == KGSL_SYNCOBJ_STATE_UNSIGNALED) {
+          kgsl_syncobj_reset(&ret);
+@@ -1201,7 +1339,7 @@ kgsl_syncobj_merge(struct tu_device *device,
+          continue;
+       }
+ 
+-      if (ret.state == KGSL_SYNCOBJ_STATE_TS && sync->state == KGSL_SYNCOBJ_STATE_TS && ret.queue == sync->queue) {
++      if (ret.state == KGSL_SYNCOBJ_STATE_TS && sync->state == KGSL_SYNCOBJ_STATE_TS && ret.context_id == sync->context_id) {
+          /* On the same queue we can pick the highest TS, since we wait for all. */
+          ret.timestamp = max_ts(ret.timestamp, sync->timestamp);
+          continue;
+@@ -1518,6 +1656,13 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
+    uint64_t start_ts = tu_perfetto_begin_submit();
+ #endif
+ 
++   const bool can_replace = !submit->bind_cmds.size && !u_trace_submission_data;
++   if (kgsl_context_abandoned(queue, queue->msm_queue_id) &&
++       (!can_replace || !kgsl_replace_context(queue))) {
++      return vk_device_set_lost(&queue->device->vk,
++                                "KGSL context lost and not replaceable");
++   }
++
+    if (submit->commands.size == 0 && submit->bind_cmds.size == 0) {
+       /* This handles the case where we have a wait and no commands to submit.
+        * It is necessary to handle this case separately as the kernel will not
+@@ -1537,6 +1682,7 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
+          last_submit_sync = (struct kgsl_syncobj) {
+             .state = KGSL_SYNCOBJ_STATE_TS,
+             .queue = queue,
++            .context_id = queue->msm_queue_id,
+             .timestamp = queue->fence,
+          };
+       else
+@@ -1645,7 +1791,7 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
+       break;
+ 
+    case KGSL_SYNCOBJ_STATE_TS:
+-      ts.context_id = wait_sync.queue->msm_queue_id;
++      ts.context_id = wait_sync.context_id;
+       ts.timestamp = wait_sync.timestamp;
+ 
+       has_sync = true;
+@@ -1694,9 +1840,34 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
+       ret = safe_ioctl(queue->device->physical_device->local_fd,
+                        IOCTL_KGSL_GPU_COMMAND, &req);
+ 
+-      const int error = errno;
+-      /* EPROTO - Device faulted since the last check. */
++      int error = ret ? errno : 0;
++      /* KGSL rejects invalid or detached contexts before queueing command
++       * work. Retry that request once, using a fresh context and preserving
++       * its wait. A timestamp from an invalid context cannot be replayed.
++       */
++      if (ret && can_replace &&
++          kgsl_record_context_fault(queue, req.context_id, error) &&
++          !(wait_sync.state == KGSL_SYNCOBJ_STATE_TS &&
++            kgsl_context_abandoned(wait_sync.queue, wait_sync.context_id)) &&
++          kgsl_replace_context(queue)) {
++         req.context_id = queue->msm_queue_id;
++         req.timestamp = 0;
++         ret = safe_ioctl(queue->device->physical_device->local_fd,
++                          IOCTL_KGSL_GPU_COMMAND, &req);
++         error = ret ? errno : 0;
++      }
++
++      /* EPROTO is a notification after queueing. Never retry that submit. */
+       profiling_submitted = profiling_buffer && (ret == 0 || error == EPROTO);
++      if (ret && error == EPROTO && kgsl_recovery_enabled(queue->device) &&
++          !kgsl_read_timestamp(queue->device, req.context_id,
++                               KGSL_TIMESTAMP_QUEUED, &req.timestamp)) {
++         const uint32_t previous = queue->fence;
++         if (previous == UINT32_MAX ? req.timestamp != 0 :
++             req.timestamp != previous && timestamp_cmp(req.timestamp, previous))
++            ret = 0;
++      }
++
+       if (ret) {
+          kgsl_syncobj_destroy(&wait_sync);
+          result = vk_device_set_lost(&queue->device->vk, "submit failed: %s\n", strerror(error));
+@@ -1789,6 +1960,7 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
+       kgsl_syncobj_reset(signal_sync);
+       signal_sync->state = KGSL_SYNCOBJ_STATE_TS;
+       signal_sync->queue = queue;
++      signal_sync->context_id = queue->msm_queue_id;
+       signal_sync->timestamp = timestamp;
+    }
+ 
+@@ -1853,9 +2025,17 @@ kgsl_device_check_status(struct tu_device *device)
+          * KGSL_CTX_STAT_* for the worst reset that happened since the last time it
+          * was queried on that queue.
+          */
+-         uint32_t value = device->queues[i][q].msm_queue_id;
++         struct tu_queue *queue = &device->queues[i][q];
++         const uint32_t context_id = p_atomic_read(&queue->msm_queue_id);
++         if (kgsl_context_abandoned(queue, context_id))
++            continue;
++
++         uint32_t value = context_id;
+          VkResult status = get_kgsl_prop(device->fd, KGSL_PROP_GPU_RESET_STAT,
+                                        &value, sizeof(value));
++         if (kgsl_context_abandoned(queue, context_id))
++            continue;
++
+          if (status != VK_SUCCESS)
+             return vk_device_set_lost(&device->vk, "Failed to get GPU reset status");
+ 
+diff --git a/src/freedreno/vulkan/tu_queue.h b/src/freedreno/vulkan/tu_queue.h
+index 48f2ea98..32bde9b3 100644
+--- a/src/freedreno/vulkan/tu_queue.h
++++ b/src/freedreno/vulkan/tu_queue.h
+@@ -26,6 +26,11 @@ struct tu_queue
+ 
+    enum tu_queue_type type;
+    uint32_t msm_queue_id;
++   struct {
++      uint32_t id;
++      uint32_t invalid;
++   } kgsl_contexts[4];
++   uint32_t kgsl_context_index;
+    uint32_t priority;
+ 
+    uint32_t sparse_queue_id;

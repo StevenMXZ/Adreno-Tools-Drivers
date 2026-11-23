@@ -144,7 +144,8 @@ NEW_TU = """   device->vk.supported_sync_types = device->sync_types;
     * 28-31) as "allocate UBWC-compressed". Confirmed on a840: every buffer
     * carrying it is reported compressed and is sized with a metadata plane.
     */
-   device->vk.ahb_vendor_usage_compressed = 0x10000000ull;"""
+   if (device->info->chip == A8XX)
+      device->vk.ahb_vendor_usage_compressed = 0x10000000ull;"""
 
 # Our own marker, so "the field exists" can be told apart from "the field exists
 # because we put it there". If upstream ever grows its own vendor-usage concept

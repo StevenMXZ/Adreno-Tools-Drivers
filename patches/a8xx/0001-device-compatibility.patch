@@ -1,0 +1,49 @@
+diff --git a/src/freedreno/common/freedreno_dev_info.h b/src/freedreno/common/freedreno_dev_info.h
+index 47f47f93..65e73883 100644
+--- a/src/freedreno/common/freedreno_dev_info.h
++++ b/src/freedreno/common/freedreno_dev_info.h
+@@ -484,6 +484,7 @@ struct fd_dev_info {
+        * expected:
+        */
+       bool has_salu_int_narrowing_quirk;
++      bool disable_gmem;
+ 
+       /* Whether the device supports the image processing opcode */
+       bool has_image_processing;
+diff --git a/src/freedreno/common/freedreno_devices.py b/src/freedreno/common/freedreno_devices.py
+index 63abb5cc..38715cf0 100644
+--- a/src/freedreno/common/freedreno_devices.py
++++ b/src/freedreno/common/freedreno_devices.py
+@@ -823,6 +823,7 @@ a7xx_base = GPUProps(
+     )
+ 
+ a7xx_gen1 = GPUProps(
++        has_early_preamble = False,
+         supports_uav_ubwc = True,
+         enable_tp_ubwc_flag_hint = True,
+         reading_shading_rate_requires_smask_quirk = True,
+@@ -1492,6 +1493,8 @@ a8xx_gen2 = GPUProps(
+ 
+ add_gpus([
+        GPUId(chip_id=0xffff44010000, name="Adreno (TM) 810"),
++       GPUId(chip_id=0xffff44010200, name="Adreno (TM) 812"),
++       GPUId(chip_id=0x44010200, name="Adreno (TM) 812"), # KGSL
+     ], A6xxGPUInfo(
+         CHIP.A8XX,
+         [a7xx_base, a7xx_gen3, a8xx_base, a8xx_gen1, a8xx_vpc_cache_sm, GPUProps(
+diff --git a/src/freedreno/vulkan/tu_cmd_buffer.cc b/src/freedreno/vulkan/tu_cmd_buffer.cc
+index ca3fca59..5e55e4b3 100644
+--- a/src/freedreno/vulkan/tu_cmd_buffer.cc
++++ b/src/freedreno/vulkan/tu_cmd_buffer.cc
+@@ -1425,6 +1425,11 @@ use_sysmem_rendering(struct tu_cmd_buffer *cmd,
+       return true;
+    }
+ 
++   if (cmd->device->physical_device->info->props.disable_gmem) {
++      cmd->state.rp.force_render_mode_reason = "GMEM unavailable on this GPU";
++      return true;
++   }
++
+    /* can't fit attachments into gmem */
+    if (!cmd->state.tiling->possible) {
+       cmd->state.rp.force_render_mode_reason = "Can't fit attachments into gmem";

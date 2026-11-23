@@ -1,0 +1,20 @@
+Subject: Revert a6xx D32S8 EARLY_Z_LATE_Z workaround
+
+Revert Mesa commit a70d2af590db192f87b3af01f83a68b450edb4c3 as in the Turnip R2 recipe.
+
+diff --git a/src/freedreno/vulkan/tu_cmd_buffer.cc b/src/freedreno/vulkan/tu_cmd_buffer.cc
+index 9d6292cd..59c125e5 100644
+--- a/src/freedreno/vulkan/tu_cmd_buffer.cc
++++ b/src/freedreno/vulkan/tu_cmd_buffer.cc
+@@ -8054,11 +8054,6 @@ tu6_build_depth_plane_z_mode(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
+       zmode = A6XX_LATE_Z;
+    }
+ 
+-   /* A630/A650 hangs with this combination of states. */
+-   if (CHIP == A6XX && zmode == A6XX_EARLY_Z_LATE_Z && depth_format == VK_FORMAT_D32_SFLOAT_S8_UINT &&
+-       fs_kill_fragments)
+-      zmode = A6XX_LATE_Z;
+-
+    if ((stencil_test_enable && depth_format == VK_FORMAT_S8_UINT) ||
+        (ds_test_enable &&
+         (fs->fs.lrz.force_late_z || cmd->state.lrz.force_late_z)))

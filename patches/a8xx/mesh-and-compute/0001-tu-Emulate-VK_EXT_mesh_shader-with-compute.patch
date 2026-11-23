@@ -544,7 +544,7 @@ index ca6e287e..c0ae61a4 100644
 +                                            .localsizez = local_size[2] - 1));
 +   }
 +
-+   if (cmd->device->physical_device->info->props.has_rt_workaround &&
++   if (FD_QUIRK(cmd->device->physical_device->info, QCTDD10497382_rt_workaround) &&
 +       v->info.uses_ray_intersection) {
 +      tu_set_render_mode<CHIP>(cs, { .shader_uses_rt = true });
 +   }
@@ -2411,7 +2411,7 @@ index 0787cd83..344fda7a 100644
  /* Returns whether we can speculatively access through a Vulkan descriptor.
   * Used for SSBO/UBO accesses, where vtn produces
   * vulkan_resource_index/load_vulkan_descriptor. See build_bindless() for the
-@@ -1605,6 +1646,20 @@ tu_lower_io(nir_shader *shader, struct tu_device *dev,
+@@ -1605,8 +1646,22 @@ tu_lower_io(nir_shader *shader, struct tu_device *dev,
        }
     }
  
@@ -2431,7 +2431,9 @@ index 0787cd83..344fda7a 100644
 +
     ir3_const_alloc(const_allocs, IR3_CONST_ALLOC_INLINE_UNIFORM_ADDRS, ldgk_consts, 1);
  
-    if (dev->physical_device->compiler_options.enable_ssbo_emulation) {
+    if (dev->physical_device->compiler_options.enable_ssbo_emulation ||
+        (dev->physical_device->compiler_options.enable_texel_buffer_emulation &&
+         !dev->compiler->info->props.has_resbase)) {
 @@ -1637,6 +1692,9 @@ tu_lower_io(nir_shader *shader, struct tu_device *dev,
        progress |= nir_shader_intrinsics_pass(shader, lower_inline_ubo,
                                                 nir_metadata_none,

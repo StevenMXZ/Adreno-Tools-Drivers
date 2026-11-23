@@ -1,0 +1,84 @@
+--- a/src/freedreno/vulkan/tu_device.cc
++++ b/src/freedreno/vulkan/tu_device.cc
+@@ -200,7 +200,7 @@
+ static bool
+ tu_has_mesh_shader(const struct tu_physical_device *device)
+ {
+-   return device->info->chip >= 7 &&
++   return device->info->chip == A8XX &&
+           device->info->cs_shared_mem_size >= 32 * 1024;
+ }
+ 
+@@ -217,8 +217,9 @@
+ static uint32_t
+ tu_min_subgroup_size(const struct tu_physical_device *device)
+ {
+-   return device->info->threadsize_base /
+-          (device->info->props.has_getfiberid ? 2 : 1);
++   const bool half_wave = device->info->chip == A8XX &&
++                          device->info->props.has_getfiberid;
++   return device->info->threadsize_base / (half_wave ? 2 : 1);
+ }
+ 
+ static void
+@@ -1150,8 +1151,10 @@
+    p->requiredSubgroupSizeStages =
+       !pdevice->expose_double_threadsize
+          ? VK_SHADER_STAGE_ALL
+-         : (VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT |
+-            VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT);
++         : (VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
++   if (pdevice->expose_double_threadsize && tu_has_mesh_shader(pdevice))
++      p->requiredSubgroupSizeStages |= VK_SHADER_STAGE_TASK_BIT_EXT |
++                                       VK_SHADER_STAGE_MESH_BIT_EXT;
+ 
+    p->maxInlineUniformBlockSize = MAX_INLINE_UBO_RANGE;
+    p->maxPerStageDescriptorInlineUniformBlocks = MAX_INLINE_UBOS;
+--- a/src/freedreno/vulkan/tu_pipeline.cc
++++ b/src/freedreno/vulkan/tu_pipeline.cc
+@@ -1769,6 +1769,14 @@
+    };
+    VkPipelineCreationFeedback stage_feedbacks[MESA_SHADER_MESH_STAGES] = { 0 };
+ 
++   const struct tu_physical_device *pdev = builder->device->physical_device;
++   const uint32_t chip_id = static_cast<uint32_t>(pdev->dev_id.chip_id);
++   const bool limit_interpolation =
++      pdev->info->chip == A8XX &&
++      (chip_id == 0x44010000 || chip_id == 0x44030000 ||
++       chip_id == 0x44030a00 || chip_id == 0x44030a20 ||
++       chip_id == 0x44050000 || chip_id == 0x44050001);
++
+    const bool executable_info =
+       builder->create_flags &
+       VK_PIPELINE_CREATE_2_CAPTURE_INTERNAL_REPRESENTATIONS_BIT_KHR;
+@@ -1935,7 +1943,8 @@
+          }
+       }
+ 
+-      keys[last_pre_rast_stage].fdm_per_layer = builder->fdm_per_layer;
++      keys[last_pre_rast_stage].fdm_per_layer =
++         builder->fdm_per_layer && !limit_interpolation;
+    }
+ 
+    if (builder->state & VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_SHADER_BIT_EXT) {
+@@ -1977,7 +1986,8 @@
+        * tu_shader_key::force_sample_interp in a bit.
+        */
+       keys[MESA_SHADER_FRAGMENT].force_sample_interp =
+-         !builder->rasterizer_discard && msaa_info && msaa_info->sampleShadingEnable;
++         !limit_interpolation && !builder->rasterizer_discard &&
++         msaa_info && msaa_info->sampleShadingEnable;
+    }
+ 
+    unsigned char pipeline_blake3[BLAKE3_KEY_LEN];
+--- a/src/freedreno/vulkan/tu_shader.cc
++++ b/src/freedreno/vulkan/tu_shader.cc
+@@ -4206,7 +4206,7 @@
+                             struct tu_device *dev)
+ {
+    enum ir3_wavesize_option api_wavesize, real_wavesize;
+-   if (subgroup_info &&
++   if (dev->physical_device->info->chip == A8XX && subgroup_info &&
+        subgroup_info->requiredSubgroupSize < dev->compiler->info->threadsize_base) {
+       api_wavesize = IR3_HALF_ONLY;
+       real_wavesize = IR3_SINGLE_ONLY;

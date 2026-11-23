@@ -1,0 +1,22 @@
+Subject: tu/android: enable the UBWC hint on Adreno 740
+
+Enable the hint for every Android FD740 entry. FD740v3 already enables
+it through the Mesa device table. This leaves the X1-85 entry alone.
+
+Reference: https://github.com/The412Banner/Banners-Turnip/commit/3a83927f3dbe3c46cd55100963a33a199c0f1b50
+
+--- a/src/freedreno/vulkan/tu_device.cc
++++ b/src/freedreno/vulkan/tu_device.cc
+@@ -1748,6 +1748,12 @@
+       device->dev_info = info;
+       device->info = &device->dev_info;
+ 
++#if DETECT_OS_ANDROID
++      /* FD740v3 already enables the hint in the Mesa device table. */
++      if (strcmp(fd_name, "FD740") == 0)
++         device->dev_info.props.enable_tp_ubwc_flag_hint = true;
++#endif
++
+       device->usable_gmem_size_gmem =
+          fd6_calc_gmem_cache_offsets(&info, device->gmem_size,
+                                      &device->config_gmem,

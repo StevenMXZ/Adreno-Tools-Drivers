@@ -1,0 +1,133 @@
+Subject: tu: keep UBWC on mutable images
+
+Port the default behavior of Vauzi-17's Turnip-Z mutable-image change.
+Keep the existing base-format, NV12 and R8G8/R16 layout restrictions.
+
+Source: https://github.com/Vauzi-17/710/commit/a95571fa8a80968c79f2dbe8b13f224b6a1bf7c3
+
+--- a/src/freedreno/vulkan/tu_image.cc
++++ b/src/freedreno/vulkan/tu_image.cc
+@@ -463,25 +463,6 @@
+ }
+ 
+ static bool
+-format_list_has_swaps(const VkImageFormatListCreateInfo *fmt_list)
+-{
+-   /* If there's no format list, then the app may reinterpret to any compatible
+-    * format, and presumably one would have the swap set.
+-    */
+-   if (!fmt_list || !fmt_list->viewFormatCount)
+-      return true;
+-
+-   for (uint32_t i = 0; i < fmt_list->viewFormatCount; i++) {
+-      enum pipe_format format =
+-         vk_format_to_pipe_format(fmt_list->pViewFormats[i]);
+-
+-      if (tu6_format_texture(format, TILE6_LINEAR, false).swap)
+-         return true;
+-   }
+-   return false;
+-}
+-
+-static bool
+ format_list_has_uncompressed_format(
+    const VkImageFormatListCreateInfo *fmt_list)
+ {
+@@ -493,31 +474,6 @@
+          return true;
+    }
+    return false;
+-}
+-
+-/* Return true if all formats in the format list can support UBWC. */
+-static bool
+-format_list_ubwc_possible(struct tu_device *dev,
+-                          const VkImageFormatListCreateInfo *fmt_list,
+-                          const VkImageCreateInfo *create_info)
+-{
+-   /* If there is no format list, we may have to assume that a
+-    * UBWC-incompatible format may be used.
+-    * TODO: limit based on compatiblity class
+-    */
+-   if (!fmt_list || !fmt_list->viewFormatCount)
+-      return false;
+-
+-   for (uint32_t i = 0; i < fmt_list->viewFormatCount; i++) {
+-      if (!ubwc_possible(dev, fmt_list->pViewFormats[i],
+-                         create_info->imageType, create_info->flags,
+-                         create_info->usage, create_info->usage,
+-                         dev->physical_device->info, create_info->samples,
+-                         create_info->mipLevels, dev->use_z24uint_s8uint))
+-         return false;
+-   }
+-
+-   return true;
+ }
+ 
+ template <chip CHIP>
+@@ -592,16 +548,9 @@
+                       pCreateInfo->mipLevels, device->use_z24uint_s8uint))
+       ubwc_enabled = false;
+ 
+-   /* Mutable images can be reinterpreted as any other compatible format.
+-    * This is a problem with UBWC (compression for different formats is different),
+-    * but also tiling ("swap" affects how tiled formats are stored in memory)
+-    * Depth and stencil formats cannot be reintepreted as another format, and
+-    * cannot be linear with sysmem rendering, so don't fall back for those.
+-    *
+-    * TODO:
+-    * - if the fmt_list contains only formats which are swapped, but compatible
+-    *   with each other (B8G8R8A8_UNORM and B8G8R8A8_UINT for example), then
+-    *   tiling is still possible
++   /* Preserve tiling and UBWC for mutable color images when the base
++    * format supports them. Keep the linear layout for reinterpretations
++    * that require different block dimensions.
+     */
+    if ((pCreateInfo->flags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) &&
+        !vk_format_is_depth_or_stencil(image->vk.format)) {
+@@ -627,40 +576,12 @@
+             }
+             ubwc_enabled = false;
+             force_linear_tile = true;
+-         } else if (!mutable_ubwc_fc) {
+-            if (ubwc_enabled) {
+-               if (fmt_list && fmt_list->viewFormatCount == 2) {
+-                  perf_debug(
+-                     device,
+-                     "Disabling UBWC on %dx%d %s resource due to mutable formats "
+-                     "(fmt list %s, %s)",
+-                     image->vk.extent.width, image->vk.extent.height,
+-                     util_format_name(vk_format_to_pipe_format(image->vk.format)),
+-                     util_format_name(vk_format_to_pipe_format(fmt_list->pViewFormats[0])),
+-                     util_format_name(vk_format_to_pipe_format(fmt_list->pViewFormats[1])));
+-               } else {
+-                  perf_debug(
+-                     device,
+-                     "Disabling UBWC on %dx%d %s resource due to mutable formats "
+-                     "(fmt list %s)",
+-                     image->vk.extent.width, image->vk.extent.height,
+-                     util_format_name(vk_format_to_pipe_format(image->vk.format)),
+-                     fmt_list ? "present" : "missing");
+-               }
+-               ubwc_enabled = false;
+-            }
+-
+-            bool r8g8_r16 = format_list_reinterprets_r8g8_r16(vk_format_to_pipe_format(image->vk.format), fmt_list);
+-            bool fmt_list_has_swaps = format_list_has_swaps(fmt_list);
+-
+-            if (r8g8_r16 || fmt_list_has_swaps) {
+-               ubwc_enabled = false;
+-               force_linear_tile = true;
+-            }
+-         } else {
++         } else if (mutable_ubwc_fc) {
+             is_mutable = true;
+-            if (!format_list_ubwc_possible(device, fmt_list, pCreateInfo))
+-               ubwc_enabled = false;
++         } else if (format_list_reinterprets_r8g8_r16(
++                       vk_format_to_pipe_format(image->vk.format), fmt_list)) {
++            ubwc_enabled = false;
++            force_linear_tile = true;
+          }
+ 
+          /* If the threshold of the linear mipmap fallback for compressed

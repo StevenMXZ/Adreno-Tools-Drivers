@@ -42,7 +42,7 @@ index 8f4f4328..2fa865de 100644
 +        cube_coord_hang_quirk = True,
  
          QCTDD10204462 = False,
-         QCTDD11147232 = False,
+         QCTDD10497382 = False,
 diff --git a/src/freedreno/ir3/ir3_nir.c b/src/freedreno/ir3/ir3_nir.c
 index df8e07b1..1937a9a1 100644
 --- a/src/freedreno/ir3/ir3_nir.c

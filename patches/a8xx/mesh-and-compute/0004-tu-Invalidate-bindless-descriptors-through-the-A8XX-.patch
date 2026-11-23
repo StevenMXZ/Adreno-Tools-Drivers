@@ -28,7 +28,7 @@ index 714b103b..d100c307 100644
 +   if (CHIP >= A8XX)
 +      tu_emit_bindless_invalidate<CHIP>(cs, true, true);
  
-    with_crb (cs, 2 * 5 + 2 * 12) {
+    with_crb (cs, 2 * 5 + 2 * 12 + 2 * 3) {
        tu6_emit_xs_config<CHIP>(crb, { .vs = vs, .fs = fs });
 diff --git a/src/freedreno/vulkan/tu_cmd_buffer.cc b/src/freedreno/vulkan/tu_cmd_buffer.cc
 index a1b75f01..ea1cecd8 100644
