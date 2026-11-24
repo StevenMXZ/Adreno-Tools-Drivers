@@ -25,8 +25,8 @@ prepare_ndk(){
 compile_mesa() {
     local repo_url="https://gitlab.freedesktop.org/mesa/mesa.git"
     local branch="main"
-    local build_name="Turnip-Main-Clean-SDK35"
-    local output_tag="V97-Main-SDK35"
+    local build_name="Turnip-A10-Test"
+    local output_tag="A10-Test-1"
 
     echo "Cloning Mesa Main..."
     
@@ -47,9 +47,7 @@ compile_mesa() {
 
     local ndk_bin="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
     local ndk_sys="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-    local cver="35"
-    [ ! -f "$ndk_bin/aarch64-linux-android${cver}-clang" ] && cver="34"
-
+    local cver="29"
     cat <<EOF > android-cross.txt
 [binaries]
 ar = '$ndk_bin/llvm-ar'
@@ -74,7 +72,7 @@ EOF
     meson setup "$build_dir" --cross-file android-cross.txt \
         -Dbuildtype=release \
         -Dplatforms=android \
-        -Dplatform-sdk-version=35 \
+        -Dplatform-sdk-version=29 \
         -Dandroid-stub=true \
         -Dgallium-drivers= \
         -Dvulkan-drivers=freedreno \
@@ -100,9 +98,9 @@ EOF
     
     echo "{
   \"schemaVersion\": 1,
-  \"name\": \"$build_name\",
+  \"name\": \"$NELL_512\",
   \"description\": \"Mesa Main Clean Build (SDK 35)\",
-  \"author\": \"StevenMX\",
+  \"author\": \"NELL512\",
   \"packageVersion\": \"1\",
   \"vendor\": \"Mesa\",
   \"driverVersion\": \"$output_tag\",
