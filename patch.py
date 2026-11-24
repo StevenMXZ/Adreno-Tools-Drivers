@@ -35,7 +35,7 @@ for o, tag, val in dyn: D.setdefault(tag, (o, val))
 DT_RELA, DT_RELASZ, DT_JMPREL, DT_PLTRELSZ = 7, 8, 23, 2
 SYMTAB, STRTAB, VERSYM = D[6][1], D[5][1], D[0x6ffffff0][1]
 RELR, RELRSZ, RELRENT = 0x6fffe000, 0x6fffe001, 0x6fffe003
-rela_va, rela_sz = D[DT_RELA][1], D[DT_RELASZ][1]
+relr_va, relr_sz = D.get(RELR, (0, 0))[1], D.get(RELRSZ, (0, 0))[1]
 jmp_va, jmp_sz = D[DT_JMPREL][1], D[DT_PLTRELSZ][1]
 relr_va, relr_sz = D[RELR][1], D[RELRSZ][1]
 nsyms = (STRTAB - SYMTAB) // 24  # strtab follows symtab-adjacent sections; refined below
