@@ -46,3 +46,9 @@ jobs:
         with:
           tag_name: v${{ github.run_number }}
           files: turnip_workdir/*.zip
+
+      - name: Upload raw build
+        uses: actions/upload-artifact@v4
+        with:
+          name: Turnip-Raw
+          path: turnip_workdir/Turnip-*.zip
