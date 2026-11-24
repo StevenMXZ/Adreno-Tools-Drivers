@@ -55,7 +55,7 @@ c = ['ccache', '$ndk_bin/aarch64-linux-android${cver}-clang', '--sysroot=$ndk_sy
 cpp = ['ccache', '$ndk_bin/aarch64-linux-android${cver}-clang++', '--sysroot=$ndk_sys']
 c_ld = 'lld'
 cpp_ld = 'lld'
-strip = '$ndk_bin/aarch64-linux-android-strip'
+strip = '$ndk_bin/llvm-strip'
 [host_machine]
 system = 'android'
 cpu_family = 'aarch64'
