@@ -47,7 +47,7 @@ compile_mesa() {
 
     local ndk_bin="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
     local ndk_sys="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-    local cver="29"
+    local cver="35" dan baris && cver="34"
     cat <<EOF > android-cross.txt
 [binaries]
 ar = '$ndk_bin/llvm-ar'
@@ -72,7 +72,7 @@ EOF
     meson setup "$build_dir" --cross-file android-cross.txt \
         -Dbuildtype=release \
         -Dplatforms=android \
-        -Dplatform-sdk-version=29 \
+        -Dplatform-sdk-version=35 \
         -Dandroid-stub=true \
         -Dgallium-drivers= \
         -Dvulkan-drivers=freedreno \
