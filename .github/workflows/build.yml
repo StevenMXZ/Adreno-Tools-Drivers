@@ -1,4 +1,4 @@
-name: Build Turnip Clean 
+name: Build Turnip A10
 
 on:
   workflow_dispatch:
@@ -31,7 +31,7 @@ jobs:
           cd turnip_workdir
           mkdir orig out
           unzip -q Turnip-*.zip -d orig
-          python3 ../tools/patch.py orig/vulkan.ad07XX.so out/vulkan.ad07XX.so patchwork
+          python3 ../patch.py orig/vulkan.ad07XX.so out/vulkan.ad07XX.so patchwork
           cp orig/meta.json out/meta.json
           (cd out && zip -9 -q ../Turnip-A10-Patched.zip vulkan.ad07XX.so meta.json)
      
