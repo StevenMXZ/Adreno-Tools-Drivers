@@ -2,7 +2,8 @@
 
 - Mesa and Freedreno contributors for Turnip.
 - MaxsTechReview and [WinNative-Emu/Drivers](https://github.com/WinNative-Emu/Drivers) for mesh shader and WaveSize(32) emulation, A8xx hang fixes and the Android GPU recipe.
-- whitebelyash for the A8xx Gen8 hardware work.
+- whitebelyash for the A8xx Gen8 hardware work and concurrent binning workaround.
+- DVD (DiskDVD) for the Gen8 IR3 profile helpers and A825 cache configuration, as preserved in the earlier Gen8 build.
 - Droid-Deck/Drivers for A8xx KGSL aliases, misakayuuki for the CAT4 workaround,for Android gralloc and UBWC, and for memory accounting. [Droid-Deck/Drivers](https://github.com/Droid-Deck/Drivers)
 - Vauzi-17 for the [Turnip-Z mutable UBWC port](https://github.com/Vauzi-17/710/commit/a95571fa8a80968c79f2dbe8b13f224b6a1bf7c3) and A8xx resolve and LRZ register work.
 - VoltrexKeyva for identifying the [A830 predicate bug](https://github.com/StevenMXZ/Adreno-Tools-Drivers/pull/1).

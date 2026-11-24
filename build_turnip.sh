@@ -72,6 +72,7 @@ apply_unified_patches() {
     apply_patch a6xx/0001-revert-d32s8-late-z-workaround.patch
     apply_patch a6xx/0002-kgsl-context-recovery.patch
     apply_patch common/tu-vauzi-mutable-ubwc.patch
+    python3 -B "$REPO_ROOT/patches/a8xx/restore_gen8_profiles.py"
 
     for script in a8xx/apply_a8xx_cat4_rpt.py a8xx/a8xx_resolve_cr_cntl.py \
                   a8xx/a8xx_lrz_color_mask.py a8xx/process_heap_usage.py; do
