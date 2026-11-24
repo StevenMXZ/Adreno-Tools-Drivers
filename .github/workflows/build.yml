@@ -24,7 +24,17 @@ jobs:
         run: |
           chmod +x build_turnip.sh
           ./build_turnip.sh
-
+      
+      - name: Patch for Android 10
+        run: |
+          export PATH="$PWD/turnip_workdir/android-ndk-r28/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+          cd turnip_workdir
+          mkdir orig out
+          unzip -q Turnip-*.zip -d orig
+          python3 ../tools/patch.py orig/vulkan.ad07XX.so out/vulkan.ad07XX.so patchwork
+          cp orig/meta.json out/meta.json
+          (cd out && zip -9 -q ../Turnip-A10-Patched.zip vulkan.ad07XX.so meta.json)
+     
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
