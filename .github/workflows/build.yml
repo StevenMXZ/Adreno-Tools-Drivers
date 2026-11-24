@@ -22,8 +22,8 @@ jobs:
 
       - name: Build
         run: |
-          chmod +x build_turnip.sh
-          ./build_turnip.sh
+          chmod +x turnip_builder.sh
+          ./turnip_builder.sh
       
       - name: Patch for Android 10
         run: |
