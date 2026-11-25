@@ -33,7 +33,7 @@ This is a bash script to build freedreno/turnip for android as an adrenotool pac
   https://gitlab.freedesktop.org/mesa/mesa
 - Modified & built by NELL512
 -Modifications:
-Applied shim.c , patch and edited turnip.sh
+Applied shim.c , patch.py and edited turnip_builder.sh
 -**Android 10 (A10) compatibility**
 
 Build date: November 25, 2026
