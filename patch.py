@@ -37,7 +37,7 @@ SYMTAB, STRTAB, VERSYM = D[6][1], D[5][1], D[0x6ffffff0][1]
 RELR, RELRSZ, RELRENT = 0x6fffe000, 0x6fffe001, 0x6fffe003
 relr_va, relr_sz = D.get(RELR, (0, 0))[1], D.get(RELRSZ, (0, 0))[1]
 jmp_va, jmp_sz = D[DT_JMPREL][1], D[DT_PLTRELSZ][1]
-relr_va, relr_sz = D[RELR][1], D[RELRSZ][1]
+relr_va, relr_sz = D.get(RELR, (0, 0))[1], D.get(RELRSZ, (0, 0))[1]
 nsyms = (STRTAB - SYMTAB) // 24  # strtab follows symtab-adjacent sections; refined below
 nsyms = struct.unpack_from('<H', d, 0)[0] and (D[0x6ffffff0][1] - SYMTAB) // 24  # versym follows dynsym
 assert STRTAB and nsyms > 0, nsyms
