@@ -39,6 +39,11 @@ jobs:
           unzip -q Turnip-*.zip -d orig
           python3 ../patch.py orig/vulkan.ad07XX.so out/vulkan.ad07XX.so patchwork
           cp orig/meta.json out/meta.json
+          MESA_VER=$(head -n1 mesa/VERSION)
+          NAME="Turnip v${MESA_VER} NELL512 A10 $(git -C mesa rev-parse --short HEAD)"
+          sed -i "s|\"name\": *\"[^\"]*\"|\"name\": \"$NAME\"|" out/meta.json
+          sed -i "s|\"driverVersion\": *\"[^\"]*\"|\"driverVersion\": \"v${MESA_VER} NELL512 A10\"|" out/meta.json
+          sed -i "s|\"description\": *\"[^\"]*\"|\"description\": \"Mesa $NAME\"|" out/meta.json
           (cd out && zip -9 -q ../Turnip-A10-Patched.zip vulkan.ad07XX.so meta.json)
 
       - name: Upload patched build
