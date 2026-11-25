@@ -47,7 +47,7 @@ compile_mesa() {
 
     local ndk_bin="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
     local ndk_sys="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-    local cver="35" dan baris && cver="34"
+    local cver="34"
     cat <<EOF > android-cross.txt
 [binaries]
 ar = '$ndk_bin/llvm-ar'
@@ -98,7 +98,7 @@ EOF
     
     echo "{
   \"schemaVersion\": 1,
-  \"name\": \"$NELL512\",
+  \"name\": \"$build_name\",
   \"description\": \"Mesa Turnip v27.0.0-devel NELL512 A10\",
   \"author\": \"NELL512\",
   \"packageVersion\": \"1\",
