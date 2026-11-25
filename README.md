@@ -34,5 +34,8 @@ This is a bash script to build freedreno/turnip for android as an adrenotool pac
 - Modified & built by NELL512
 -Modifications:
 Added shim patch and edited turnip.sh
+-**Android 10 (A10) compatibility**
+
 Build date: November 25, 2026
+
 License: GPL-3.0
