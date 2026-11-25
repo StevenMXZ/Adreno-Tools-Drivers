@@ -1,4 +1,4 @@
-name: Build Turnip v27.0.0-devel NELL512
+name: Build Turnip v27.0.0-devel NELL512 A10
 
 on:
   workflow_dispatch:
