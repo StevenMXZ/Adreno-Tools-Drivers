@@ -43,7 +43,10 @@ jobs:
           NAME="Turnip v${MESA_VER} NELL512 A10 $(git -C mesa rev-parse --short HEAD)"
           sed -i "s|\"name\": *\"[^\"]*\"|\"name\": \"$NAME\"|" out/meta.json
           sed -i "s|\"driverVersion\": *\"[^\"]*\"|\"driverVersion\": \"v${MESA_VER} NELL512 A10\"|" out/meta.json
-          sed -i "s|\"description\": *\"[^\"]*\"|\"description\": \"Mesa $NAME\"|" out/meta.json
+          MESA_COMMIT=$(git -C mesa rev-parse --short HEAD)
+          MESA_DATE=$(git -C mesa log -1 --format=%cs)
+          MESA_MSG=$(git -C mesa log -1 --format=%s | tr -d '"\\|&' | cut -c1-80)
+          sed -i "s|\"description\": *\"[^\"]*\"|\"description\": \"Mesa ${MESA_VER} (${MESA_COMMIT}, ${MESA_DATE}) - ${MESA_MSG}\"|" out/meta.json
           (cd out && zip -9 -q ../Turnip-A10-Patched.zip vulkan.ad07XX.so meta.json)
 
       - name: Upload patched build
