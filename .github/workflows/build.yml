@@ -31,7 +31,7 @@ jobs:
           path: turnip_workdir/Turnip-*.zip
 
       - name: Patch for Android 10
-        continue-on-error: true
+        continue-on-error: false
         run: |
           export PATH="$PWD/turnip_workdir/android-ndk-r28/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
           cd turnip_workdir
@@ -51,4 +51,4 @@ jobs:
         with:
           name: v27.0.0-devel NELL512
           path: turnip_workdir/Turnip-A10-Patched.zip
-          if-no-files-found: ignore
+          if-no-files-found: error 
