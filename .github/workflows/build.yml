@@ -1,4 +1,4 @@
-name: Build Turnip A10
+name: Build Turnip Clean
 
 on:
   workflow_dispatch:
@@ -9,7 +9,6 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -17,15 +16,22 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build patchelf unzip flex bison git perl python3-pip glslang-tools
+          sudo apt-get install -y ninja-build patchelf unzip flex bison git perl python3-pip glslang-tools ccache
           pip3 install --break-system-packages meson mako
 
       - name: Build
         run: |
           chmod +x turnip_builder.sh
           ./turnip_builder.sh
-      
+
+      - name: Upload raw build
+        uses: actions/upload-artifact@v4
+        with:
+          name: Turnip-Raw
+          path: turnip_workdir/Turnip-*.zip
+
       - name: Patch for Android 10
+        continue-on-error: true
         run: |
           export PATH="$PWD/turnip_workdir/android-ndk-r28/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
           cd turnip_workdir
@@ -34,21 +40,10 @@ jobs:
           python3 ../patch.py orig/vulkan.ad07XX.so out/vulkan.ad07XX.so patchwork
           cp orig/meta.json out/meta.json
           (cd out && zip -9 -q ../Turnip-A10-Patched.zip vulkan.ad07XX.so meta.json)
-     
-      - name: Upload Artifact
+
+      - name: Upload patched build
         uses: actions/upload-artifact@v4
         with:
-          name: Turnip-Driver
-          path: turnip_workdir/*.zip
-
-      - name: Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ github.run_number }}
-          files: turnip_workdir/*.zip
-
-      - name: Upload raw build
-        uses: actions/upload-artifact@v4
-        with:
-          name: Turnip-Raw
-          path: turnip_workdir/Turnip-*.zip
+          name: Turnip-A10-Patched
+          path: turnip_workdir/Turnip-A10-Patched.zip
+          if-no-files-found: ignore
