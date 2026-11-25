@@ -1,3 +1,18 @@
+# NELL512-Turnip
+
+Build Mesa Turnip untuk Adreno 6xx / 7xx, khususnya patch A10.
+
+- Driver: Mesa Turnip 27.0.0-devel
+- Target: Adreno 6xx / 7xx
+- Emulator: Winlator, GameHub, dan emulator berbasis driver Turnip
+- Cara install: impor file ZIP melalui menu Driver
+
+## Download
+https://github.com/NELL512/NELL512-Turnip/releases
+
+## Catatan
+Build masih tahap pengujian dan dapat mengandung bug.
+
 This is a bash script to build freedreno/turnip for android as an adrenotool package.
   
 ### To Build Locally
