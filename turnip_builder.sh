@@ -25,8 +25,8 @@ prepare_ndk(){
 compile_mesa() {
     local repo_url="https://gitlab.freedesktop.org/mesa/mesa.git"
     local branch="main"
-    local build_name="Turnip-A10-Test"
-    local output_tag="A10-Test-1"
+    local build_name="Turnip v27.0.0-devel NELL512 A10"
+    local output_tag="v27.0.0-devel NELL512 A10"
 
     echo "Cloning Mesa Main..."
     
@@ -98,8 +98,8 @@ EOF
     
     echo "{
   \"schemaVersion\": 1,
-  \"name\": \"$NELL_512\",
-  \"description\": \"Mesa Main Clean Build (SDK 35)\",
+  \"name\": \"$NELL512\",
+  \"description\": \"Mesa Turnip v27.0.0-devel NELL512 A10\",
   \"author\": \"NELL512\",
   \"packageVersion\": \"1\",
   \"vendor\": \"Mesa\",
