@@ -105,11 +105,14 @@ for n in need: assert n in jslot, n
 
 # relro padding area (writable, zero, before RELRO is applied) used for new GOT-like slots
 relro = [p for p in phdrs if p['type'] == 0x6474e552][0]
-RP = relro['va'] + relro['ms'] - 0x620
-assert writable(RP) and writable(RP + 0x600) and RP % 8 == 0
+# zero-filled tail of the RELRO segment (.relro_padding): [va+filesz, va+memsz)
+RP = (relro['va'] + relro['fs'] + 7) & ~7
+RP_END = relro['va'] + relro['ms']
+assert RP_END - RP >= 8 * 8, f'relro padding too small: {RP_END - RP:#x}'
+assert writable(RP) and RP % 8 == 0
 for p_ in loads:  # slots must be zero (file bytes) or beyond filesz (zero-fill)
     if p_['va'] <= RP < p_['va'] + p_['ms']:
-        for a in range(RP, RP + 0x620, 8):
+        for a in range(RP, RP_END, 8):
             if a < p_['va'] + p_['fs']: assert u64(v2o(a)) == 0, hex(a)
 print('new slots at', hex(RP))
 slot_tls, slot_pcreate = RP, RP + 8
@@ -184,7 +187,7 @@ for off, info, add in old_jmp:
         jm.append((dummy_base + 8 * dk, (abort_idx << 32) | R_JUMP_SLOT, 0)); dk += 1
     else:
         jm.append((off, info, add))
-assert dummy_base + 8 * dk < RP + 0x600
+assert dummy_base + 8 * dk <= RP_END, (dk, hex(RP_END - dummy_base))
 # recycled symbols -> required GLOB_DAT imports
 for old_, new_ in RECYCLE.items(): rel(slot_pcreate, R_GLOB_DAT, by_name[old_], 0)
 
@@ -232,7 +235,7 @@ for ent in dyn:
     elif tag == DT_RELASZ: struct.pack_into('<Q', d, o + 8, len(rela_bytes))
     elif tag in (0x1d, 0x6ffffffb): struct.pack_into('<qQ', d, o, 16, 0)  # drop RUNPATH/FLAGS_1 like the A10 reference build (DT_SYMBOLIC = harmless)
 # ---- PT_NOTE -> PT_LOAD (R+X)
-note = [p for p in phdrs if p['type'] == 4][0]
+note = [p for p in phdrs if p['type'] == 4][-1]
 struct.pack_into('<IIQQQQQQ', d, note['o'], 1, 5, O, V, V, len(seg), len(seg), PAGE)
 # ---- drop section headers + trailing debug data; append segment
 out = bytes(d[:data_end]) + b'\0' * (O - data_end) + seg
