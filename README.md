@@ -25,6 +25,8 @@ This is a bash script to build freedreno/turnip for android as an adrenotool pac
 - https://github.com/ilhan-athn7/freedreno_turnip-CI
 - https://gitlab.freedesktop.org/mesa/mesa/-/issues/6802
 ## Credits
+- Original CI script: ilhan-athn7/freedreno_turnip-CI
+  https://github.com/ilhan-athn7/freedreno_turnip-CI
 - Build script: StevenMXZ/Adreno-Tools-Drivers
   https://github.com/StevenMXZ/Adreno-Tools-Drivers
 - Driver source: Mesa / Turnip
