@@ -1,11 +1,47 @@
-This is a bash script to build freedreno/turnip for android as an adrenotool package.
-  
-### To Build Locally
-- Obtain the script [turnip_builder.sh](https://raw.githubusercontent.com/Weab-chan/freedreno_turnip-CI/main/turnip_builder.sh) on your linux environment. (visit the link and use ```CTRL + S``` keys)
-- Execute script on linux terminal ```bash ./turnip_builder.sh```
+# NELL512-Turnip
 
-### References
+Build Mesa Turnip untuk Adreno 6xx / 7xx, khususnya patch Android 10 (A10).
+
+- Driver: Mesa Turnip (main branch)
+- Target: Adreno 6xx / 7xx
+- Emulator: Winlator, GameHub, dan emulator berbasis driver Turnip
+- Cara install: impor file ZIP melalui menu Driver
+
+## Download
+
+Ambil build terbaru di tab **Actions** (artifact) atau **Releases**.
+Build date: lihat nama file / deskripsi driver.
+
+## Catatan
+
+Build masih tahap pengujian dan dapat mengandung bug.
+Dites di Poco F1, Android 10.
+
+## Build Lokal
+
+1. Ambil [turnip_builder.sh](turnip_builder.sh) di Linux.
+2. Jalankan: `bash ./turnip_builder.sh`
+
+## Modifikasi
+
+- Menambahkan `shim.c` dan `patch.py`
+- Mengedit `turnip_builder.sh`
+- Kompatibilitas Android 10 (A10)
+
+## Credits
+
+- Original CI script: [ilhan-athn7/freedreno_turnip-CI](https://github.com/ilhan-athn7/freedreno_turnip-CI)
+- Fork CI: [Weab-chan/freedreno_turnip-CI](https://github.com/Weab-chan/freedreno_turnip-CI)
+- Build script: [StevenMXZ/Adreno-Tools-Drivers](https://github.com/StevenMXZ/Adreno-Tools-Drivers)
+- Driver source: [Mesa](https://gitlab.freedesktop.org/mesa/mesa)
+- Modified & built by NELL512
+
+## References
 
 - https://forum.xda-developers.com/t/getting-freedreno-turnip-mesa-vulkan-driver-on-a-poco-f3.4323871/
-- https://github.com/ilhan-athn7/freedreno_turnip-CI
 - https://gitlab.freedesktop.org/mesa/mesa/-/issues/6802
+
+## License
+
+- `patch.py`, `shim.c`: GPL-3.0 (lihat `LICENSE`)
+- Driver hasil build: Mesa, lisensi MIT

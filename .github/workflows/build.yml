@@ -1,4 +1,4 @@
-name: Build Turnip Clean 
+name: Build Turnip NELL512 A10
 
 on:
   workflow_dispatch:
@@ -9,7 +9,6 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -17,22 +16,50 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build patchelf unzip flex bison git perl python3-pip glslang-tools
+          sudo apt-get install -y ninja-build patchelf unzip flex bison git perl python3-pip glslang-tools ccache
           pip3 install --break-system-packages meson mako
 
       - name: Build
         run: |
-          chmod +x build_turnip.sh
-          ./build_turnip.sh
+          chmod +x turnip_builder.sh
+          ./turnip_builder.sh
 
-      - name: Upload Artifact
+      - name: Upload raw build
         uses: actions/upload-artifact@v4
         with:
-          name: Turnip-Driver
-          path: turnip_workdir/*.zip
+          name: Turnip-Raw
+          path: turnip_workdir/Turnip-*.zip
 
-      - name: Release
-        uses: softprops/action-gh-release@v2
+      
+      - name: Patch for Android 10
+        continue-on-error: false
+        run: |
+          export PATH="$PWD/turnip_workdir/android-ndk-r28/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+          cd turnip_workdir
+          mkdir orig out
+          unzip -q Turnip-*.zip -d orig
+          python3 ../patch.py orig/vulkan.ad07XX.so out/vulkan.ad07XX.so patchwork
+          cp orig/meta.json out/meta.json
+          MESA_VER=$(head -n1 mesa/VERSION)
+          MESA_COMMIT=$(git -C mesa rev-parse --short HEAD)
+          NAME="Turnip v${MESA_VER} NELL512 A10 ${MESA_COMMIT}"
+          ZIP_NAME="Turnip-v${MESA_VER}-NELL512-A10-${MESA_COMMIT}-run${{ github.run_number }}"
+          echo "ART_NAME=${NAME} run${{ github.run_number }}" >> "$GITHUB_ENV"
+          echo "ZIP_NAME=${ZIP_NAME}" >> "$GITHUB_ENV"
+          sed -i "s|\"name\": *\"[^\"]*\"|\"name\": \"$NAME\"|" out/meta.json
+          sed -i "s|\"driverVersion\": *\"[^\"]*\"|\"driverVersion\": \"v${MESA_VER} NELL512 A10\"|" out/meta.json
+          MESA_DATE=$(git -C mesa log -1 --format=%cs)
+          MESA_MSG=$(git -C mesa log -1 --format=%s | tr -d '"\\|&' | cut -c1-80)
+          sed -i "s|\"description\": *\"[^\"]*\"|\"description\": \"Mesa ${MESA_VER} (${MESA_COMMIT}, ${MESA_DATE}) - ${MESA_MSG}\"|" out/meta.json
+          cat out/meta.json
+          readelf -h out/vulkan.ad07XX.so | grep -q 'Number of section headers: *[1-9]' || { echo "ERROR: section headers hilang"; exit 1; }
+          readelf -d out/vulkan.ad07XX.so | grep SONAME
+          sha256sum out/vulkan.ad07XX.so
+          (cd out && zip -9 -q "../${ZIP_NAME}.zip" vulkan.ad07XX.so meta.json)
+
+      - name: Upload patched build
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: v${{ github.run_number }}
-          files: turnip_workdir/*.zip
+          name: ${{ env.ART_NAME }}
+          path: turnip_workdir/${{ env.ZIP_NAME }}.zip
+          if-no-files-found: error

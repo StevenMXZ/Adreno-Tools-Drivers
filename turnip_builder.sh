@@ -25,8 +25,8 @@ prepare_ndk(){
 compile_mesa() {
     local repo_url="https://gitlab.freedesktop.org/mesa/mesa.git"
     local branch="main"
-    local build_name="Turnip-Main-Clean-SDK35"
-    local output_tag="V97-Main-SDK35"
+    local build_name="Build Turnip NELL512 A10"
+    local output_tag="Build Turnip NELL512 A10"
 
     echo "Cloning Mesa Main..."
     
@@ -47,9 +47,7 @@ compile_mesa() {
 
     local ndk_bin="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
     local ndk_sys="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-    local cver="35"
-    [ ! -f "$ndk_bin/aarch64-linux-android${cver}-clang" ] && cver="34"
-
+    local cver="34"
     cat <<EOF > android-cross.txt
 [binaries]
 ar = '$ndk_bin/llvm-ar'
@@ -57,7 +55,7 @@ c = ['ccache', '$ndk_bin/aarch64-linux-android${cver}-clang', '--sysroot=$ndk_sy
 cpp = ['ccache', '$ndk_bin/aarch64-linux-android${cver}-clang++', '--sysroot=$ndk_sys']
 c_ld = 'lld'
 cpp_ld = 'lld'
-strip = '$ndk_bin/aarch64-linux-android-strip'
+strip = '$ndk_bin/llvm-strip'
 [host_machine]
 system = 'android'
 cpu_family = 'aarch64'
@@ -101,8 +99,8 @@ EOF
     echo "{
   \"schemaVersion\": 1,
   \"name\": \"$build_name\",
-  \"description\": \"Mesa Main Clean Build (SDK 35)\",
-  \"author\": \"StevenMX\",
+  \"description\": \"Mesa Build Turnip NELL512 A10\",
+  \"author\": \"NELL512\",
   \"packageVersion\": \"1\",
   \"vendor\": \"Mesa\",
   \"driverVersion\": \"$output_tag\",
