@@ -32,6 +32,7 @@ This is a bash script to build freedreno/turnip for android as an adrenotool pac
 - Driver source: Mesa / Turnip
   https://gitlab.freedesktop.org/mesa/mesa
 - Modified & built by NELL512
--Modifications: Added shim patch and edited turnip.sh
+-Modifications:
+Added shim patch and edited turnip.sh
 Build date: November 25, 2026
 License: GPL-3.0
