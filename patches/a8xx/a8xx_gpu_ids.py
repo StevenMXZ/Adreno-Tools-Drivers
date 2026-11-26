@@ -33,7 +33,8 @@ def put_ids(anchor_ids, wanted, description):
 # The 810 and 829 entries are present in both source variants or upstream;
 # only add the missing speedbin/KGSL aliases.
 put_ids(("0xffff44010000", "0x44010000"),
-        (("0x44010000", "810"),), "A810")
+        (("0x44010000", "810"),
+         ("0xffff44010200", "812"), ("0x44010200", "812")), "A810/A812")
 put_ids(("0x44030a20", "0x44030a00", "0xffff44030a00"),
         (("0x44030A00", "829"), ("0xffff44030A00", "829")), "A829")
 
