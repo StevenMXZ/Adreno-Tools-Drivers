@@ -2210,7 +2210,7 @@ diff --git a/src/freedreno/vulkan/tu_pipeline.cc b/src/freedreno/vulkan/tu_pipel
 index b9a1ec9c..aade8dcc 100644
 --- a/src/freedreno/vulkan/tu_pipeline.cc
 +++ b/src/freedreno/vulkan/tu_pipeline.cc
-@@ -53,6 +53,17 @@ emit_load_state(struct tu_cs *cs, unsigned opcode, enum a6xx_state_type st,
+@@ -53,11 +53,22 @@ emit_load_state(struct tu_cs *cs, unsigned opcode, enum a6xx_state_type st,
     tu_cs_emit_qw(cs, offset | (base << 28));
  }
  
@@ -2225,6 +2225,11 @@ index b9a1ec9c..aade8dcc 100644
 +          ~(VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT);
 +}
 +
+ /* Combined image samplers need two CP_LOAD_STATE6 packets per array element and stage, and each packet costs CP time,
+  * so we have to put some limit to reduce CP overhead. From tests preloading more than 16 is never beneficial.
+  */
+ #define TU_MAX_PRELOAD_COMBINED_SAMPLERS_PER_STAGE 16
+ 
  static unsigned
  tu6_load_state_size(struct tu_pipeline *pipeline,
                      struct tu_pipeline_layout *layout)
