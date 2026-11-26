@@ -12,11 +12,12 @@ disturbing A830 / A840 / X2-85 (which already work on stock upstream).
 - A829 (upstream-native, chip_id=0x44030a20):
     1) inject disable_gmem=True into the inline GPUProps (broken GMEM).
     2) add KGSL chip_ids 0x44030A00 and 0xffff44030A00.
-- A825 (not in upstream): insert a fresh A8xx entry derived from a8xx_gen1
-  with the depth-cache overrides this part needs.
+- A825: use the Gen1 medium-VPC profile from Mesa MR !46716 (Artem Peshkov),
+  with both KGSL chip identifiers. Preserve the upstream entry when present.
 
 Safe to run multiple times.
 """
+import re
 import sys
 
 DEVICES_PY = "src/freedreno/common/freedreno_devices.py"
@@ -122,36 +123,45 @@ else:
 A825_BLOCK = """\
 
 add_gpus([
-        GPUId(chip_id=0x44030000, name="Adreno (TM) 825"),
+        GPUId(chip_id=0x44030000, name="Adreno (TM) 825"), # KGSL
+        GPUId(chip_id=0xffff44030000, name="Adreno (TM) 825"),
     ], A6xxGPUInfo(
         CHIP.A8XX,
-        [a7xx_base, a7xx_gen3, a8xx_base, a8xx_gen1, a8xx_vpc_cache_lg, GPUProps(
-            gmem_ccu_color_cache_fraction = CCUColorCacheFraction.HALF.value,
-            gmem_per_ccu_color_cache_size = 128 * 1024,
-            gmem_ccu_depth_cache_fraction = CCUColorCacheFraction.HALF.value,
-            gmem_per_ccu_depth_cache_size = 128 * 1024,
-            sysmem_ccu_color_cache_fraction = CCUColorCacheFraction.FULL.value,
-            sysmem_per_ccu_color_cache_size = 128 * 1024,
-            sysmem_ccu_depth_cache_fraction = CCUColorCacheFraction.THREE_QUARTER.value,
-            sysmem_per_ccu_depth_cache_size = 96 * 1024,
-            disable_gmem = False,
-            shading_rate_matches_vk = True,
-        )],
+        [a7xx_base, a7xx_gen3, a8xx_base, a8xx_gen1, a8xx_vpc_cache_med],
+        gmem_size = 2432 * 1024,
         num_ccu = 4,
         num_slices = 2,
         tile_align_w = 64,
         tile_align_h = 32,
-        tile_max_w = 16416,
+        tile_max_w = 16384,
         tile_max_h = 16384,
         num_vsc_pipes = 32,
         cs_shared_mem_size = 32 * 1024,
         wave_granularity = 2,
-        fibers_per_sp = 128 * 2 * 16,
+        fibers_per_sp = 64 * 2 * 32,
         raw_magic_regs = a8xx_base_raw_magic_regs,
     ))
 """
 
-if 'GPUId(chip_id=0x44030000, name="Adreno (TM) 825")' in content or "name=\"FD825\"" in content:
+# Keep upstream definitions when present and only supply a missing KGSL alias.
+a825_ids = ("0x44030000", "0xffff44030000")
+a825_entries = {
+    chip_id: re.search(r"^([ \t]*)GPUId\(chip_id=" + chip_id + r"\b[^\n]*$", content, re.M | re.I)
+    for chip_id in a825_ids
+}
+if any(a825_entries.values()):
+    anchor = next(entry for entry in a825_entries.values() if entry)
+    missing = [chip_id for chip_id, entry in a825_entries.items() if not entry]
+    if missing:
+        aliases = "".join(
+            f'{anchor.group(1)}GPUId(chip_id={chip_id}, name="Adreno (TM) 825"), # KGSL\n'
+            for chip_id in missing
+        )
+        content = content[:anchor.start()] + aliases + content[anchor.start():]
+        changes.append("added missing A825 KGSL alias")
+    else:
+        print("  A825 entry already present, skipping")
+elif 'name="FD825"' in content or 'name="Adreno (TM) 825"' in content:
     print("  A825 entry already present, skipping")
 else:
     a810_idx = content.find(A810_LOCATE)
