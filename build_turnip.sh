@@ -75,7 +75,7 @@ apply_unified_patches() {
     python3 -B "$REPO_ROOT/patches/a8xx/restore_gen8_profiles.py"
 
     for script in a8xx/apply_a8xx_cat4_rpt.py a8xx/a8xx_resolve_cr_cntl.py \
-                  a8xx/a8xx_lrz_color_mask.py a8xx/process_heap_usage.py; do
+                  a8xx/a8xx_lrz_color_mask.py; do
         python3 -B "$REPO_ROOT/patches/$script"
     done
 
@@ -83,7 +83,7 @@ apply_unified_patches() {
     grep -Fq 'name="Adreno (TM) 825"' src/freedreno/common/freedreno_devices.py
     grep -Fq '0x44041430' src/freedreno/common/freedreno_devices.py
     grep -Fq '0x44051431' src/freedreno/common/freedreno_devices.py
-    grep -Fq 'tu_process_heap_used' src/freedreno/vulkan/tu_device.cc
+    grep -Fq 'vk_memory_budget_used(physical_device->memory_budget, 0)' src/freedreno/vulkan/tu_device.cc
     python3 -m py_compile src/freedreno/common/freedreno_devices.py
 }
 
