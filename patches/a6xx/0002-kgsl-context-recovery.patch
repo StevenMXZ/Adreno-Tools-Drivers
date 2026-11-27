@@ -54,7 +54,7 @@ index 68a684b5..37aed07c 100644
 +static bool
 +kgsl_recovery_enabled(const struct tu_device *device)
 +{
-+   return fd_dev_gen(&device->physical_device->dev_id) == 6;
++   return fd_dev_gen(&device->physical_device->dev_id) == 6 || fd_dev_gen(&device->physical_device->dev_id) == 8;
 +}
 +
 +/* Context entries are published by the submit thread under submit_mutex.
