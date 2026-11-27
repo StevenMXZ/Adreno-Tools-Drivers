@@ -493,7 +493,7 @@ index ca6e287e..c0ae61a4 100644
 +   struct tu_descriptor_state *descriptors =
 +      tu_get_descriptors_state(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS);
 +   tu_emit_cs_consts<CHIP>(cmd, cs, shader, descriptors);
-+   tu6_emit_dynamic_offset(cs, shader->variant, shader, &cmd->state.program);
++   tu6_emit_dynamic_offset(cs, shader->variant, shader, cmd->state.program);
 +   tu6_emit_bindless_bases<CHIP>(cmd, cs, descriptors, true);
 +}
 +
@@ -666,7 +666,7 @@ index ca6e287e..c0ae61a4 100644
 +
 +   /* The compute state overwrote part of the fragment shader state. */
 +   tu_cs_emit_pkt7(cs, CP_SET_DRAW_STATE, 3);
-+   tu_cs_emit_draw_state(cs, TU_DRAW_STATE_FS, cmd->state.program.fs_state);
++   tu_cs_emit_draw_state(cs, TU_DRAW_STATE_FS, cmd->state.program->fs_state);
 +
 +   if (args) {
 +      tu_cs_emit_pkt7(cs, CP_DRAW_INDIRECT_MULTI, 6);
@@ -909,7 +909,7 @@ index 14c38d7f..2c4691e3 100644
 -   struct tu_shader *shaders[MESA_SHADER_STAGES];
 +   struct tu_shader *shaders[MESA_SHADER_MESH_STAGES];
  
-    struct tu_program_state program;
+    const struct tu_program_state *program;
  
 @@ -615,6 +616,12 @@ struct tu_cmd_state
     bool fdm_custom_resolve_subsampled;
